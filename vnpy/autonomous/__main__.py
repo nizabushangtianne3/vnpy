@@ -50,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser: argparse.ArgumentParser = subparsers.add_parser("check", help="校验配置与日历")
     _add_config_argument(check_parser)
 
+    status_parser: argparse.ArgumentParser = subparsers.add_parser(
+        "status", help="查看自主交易运行状态与风控快照"
+    )
+    _add_config_argument(status_parser)
+    status_parser.add_argument("--follow", action="store_true", help="持续刷新状态，每秒刷新一次")
     optimize_parser: argparse.ArgumentParser = subparsers.add_parser(
         "optimize", help="参数网格上重复回测并输出排序结果"
     )
@@ -530,6 +535,80 @@ def command_optimize(args: argparse.Namespace) -> int:
 
 
 
+def _read_state_file(config_path: str) -> Path:
+    """Resolve the state file path the runner would have written."""
+    from .config import load_config
+
+    config = load_config(config_path)
+    state_file: str = config.runtime.state_file or "autonomous_state.json"
+    candidate: Path = Path(state_file)
+    if candidate.is_absolute():
+        return candidate
+    return Path(config_path).parent / candidate
+
+
+def _format_state_line(payload: dict) -> str:
+    """One human-readable summary line for the state payload."""
+    from datetime import datetime as _dt
+
+    now: _dt = _dt.now()
+    updated_at: str = str(payload.get("updated_at", ""))
+    try:
+        age: float = (now - _dt.fromisoformat(updated_at).replace(tzinfo=None)).total_seconds()
+    except ValueError:
+        age = -1.0
+    age_text: str = f"{age:.0f}s" if age >= 0 else "unknown"
+    guard: dict = payload.get("guard") or {}
+    health: dict = payload.get("health") or {}
+    return (
+        f"pid={payload.get('pid')} mode={payload.get('mode')} "
+        f"status={payload.get('status')} session={payload.get('session')} "
+        f"uptime={payload.get('uptime_secs')}s heartbeat_age={age_text} "
+        f"restarts={payload.get('restarts_in_session')} "
+        f"strategies={payload.get('strategy_engines')} "
+        f"guard_armed={guard.get('armed')} health_halted={health.get('halted')}"
+    )
+
+
+def command_status(args: argparse.Namespace) -> int:
+    """Print the current runtime state from the state file."""
+    import time
+
+    from .runner import read_state
+
+    config_path: str = str(args.config)
+    state_path: Path = _read_state_file(config_path)
+
+    if not args.follow:
+        if not state_path.exists():
+            print(f"错误：状态文件不存在 {state_path}")
+            print("提示：先启动 python -m vnpy.autonomous run，才会生成状态文件。")
+            return 2
+        payload = read_state(str(state_path))
+        if not payload:
+            print(f"错误：状态文件读取失败 {state_path}")
+            return 2
+        print(f"状态文件：{state_path}")
+        print(_format_state_line(payload))
+        return 0
+
+    print("按 Ctrl+C 退出。")
+    try:
+        while True:
+            if state_path.exists():
+                payload = read_state(str(state_path))
+                if payload:
+                    line: str = _format_state_line(payload)
+                    stamp: str = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{stamp}] {line}", flush=True)
+            else:
+                print("状态文件尚未生成，等待中...", flush=True)
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("已退出。")
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     from .runner import ensure_utf8_output
@@ -548,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
         "sessions": command_sessions,
         "backtest": command_backtest,
         "optimize": command_optimize,
+        "status": command_status,
     }
     handler = handlers[args.command]
     try:

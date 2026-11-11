@@ -15,6 +15,7 @@
     b. 空格分隔数据行的时间戳含空格，普通 DictReader 会把时间与价格折叠成一个字段，专用解析器按行拆分并保持 datetime 完整
 10. 新增 `python -m vnpy.autonomous optimize` 参数扫描子命令：`--grid` 展开 `fast_window=5,10;slow_window=20,40` 形式的笛卡尔积，驱动同一策略在每个参数组合上重复回测，按夏普排序输出 total_pnl / max_drawdown / trade_count / win_rate，全部组合 total_pnl <= 0 时返回 1 可直接作为流水线门槛
 11. optimize 增加 walk-forward 样本外验证：`--train-bars/--test-bars` 同时设置后按滑动窗口逐折叠「训练段选参 → 紧随其后的样本外段检验」，输出各折叠样本内外夏普与盈亏；样本外合计 pnl <= 0 或样本外平均夏普不足样本内一半时返回 1，对齐晋升手册「样本外不得显著劣于样本内」的淘汰规则
+12. 新增 `python -m vnpy.autonomous status` 运行状态子命令：读取状态文件输出 pid / 模式 / 状态 / 时段 / 运行时长 / 心跳年龄 / 重启次数 / 策略数 / 风控与熔断标记的摘要行，`--follow` 每秒刷新，状态文件缺失或不可读时返回 2 并给出启动提示
 10. 修复参考策略 realized_pnl / equity 未乘合约乘数的问题：这两个变量是货币金额，未乘数会让健康熔断与资金分配按放大了 size 倍的错误盈亏做决策，实盘下等子系统被误导
 
 ## 调整

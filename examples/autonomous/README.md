@@ -119,6 +119,8 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 `.vntrader/autonomous_state.json` 原子更新，内容包括：进程角色、模式、当前时段、距下次开盘时间、风控快照、各策略健康度、资金分配、成交台账、各网关最近事件时间。外部值守脚本（如看门狗、大屏）可直接读取。
 
+不写脚本也能看：`python -m vnpy.autonomous status` 输出一行摘要（pid、模式、状态、时段、运行时长、心跳年龄、重启次数、策略数、风控是否已武装、健康是否熔断），加 `--follow` 每秒刷新。
+
 ## 回测验收：先证明策略能赚钱再上实盘
 
 自主交易最容易犯的错误，是拿一个从没被验证过盈亏的策略直接开机自启。`backtest` 子命令就是第一道关卡：
