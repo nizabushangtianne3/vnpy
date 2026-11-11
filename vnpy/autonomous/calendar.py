@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from vnpy.trader.logger import logger
 
@@ -31,6 +31,44 @@ CN_FUTURES_NIGHT_SESSIONS: list[tuple[str, str, str]] = [
 CN_FUTURES_MIDNIGHT_NIGHT_SESSIONS: list[tuple[str, str, str]] = [
     ("night", "21:00", "02:30"),
 ]
+
+# Official 2026 exchange closure days for Chinese futures, including the
+# night-session preparatory days announced alongside each holiday block.
+CN_FUTURES_HOLIDAYS_2026: frozenset[date] = frozenset(
+    {
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        date(2026, 1, 3),
+        date(2026, 2, 15),
+        date(2026, 2, 16),
+        date(2026, 2, 17),
+        date(2026, 2, 18),
+        date(2026, 2, 19),
+        date(2026, 2, 20),
+        date(2026, 2, 23),
+        date(2026, 4, 4),
+        date(2026, 4, 5),
+        date(2026, 4, 6),
+        date(2026, 5, 1),
+        date(2026, 5, 2),
+        date(2026, 5, 3),
+        date(2026, 5, 4),
+        date(2026, 5, 5),
+        date(2026, 6, 19),
+        date(2026, 6, 20),
+        date(2026, 6, 21),
+        date(2026, 9, 25),
+        date(2026, 9, 26),
+        date(2026, 9, 27),
+        date(2026, 10, 1),
+        date(2026, 10, 2),
+        date(2026, 10, 3),
+        date(2026, 10, 4),
+        date(2026, 10, 5),
+        date(2026, 10, 6),
+        date(2026, 10, 7),
+    }
+)
 
 # Around the clock without day boundaries (crypto-like markets).
 FULL_DAY_SESSIONS: list[tuple[str, str, str]] = [
@@ -253,6 +291,16 @@ def load_holidays(path: str | Path) -> set[date]:
     return holidays
 
 
+def merge_holidays(*groups: Iterable[date] | None) -> set[date]:
+    """Combine holiday sources without mutating the built-in frozenset."""
+    merged: set[date] = set()
+    group: Iterable[date] | None
+    for group in groups:
+        if group:
+            merged.update(group)
+    return merged
+
+
 def build_profile(
     profile_name: str,
     sessions: list[dict[str, str]] | None = None,
@@ -263,6 +311,11 @@ def build_profile(
     """Build a calendar profile by name or from explicit session definitions."""
     resolved: list[Session]
     skip_weekend: bool = False
+    profile_holidays: frozenset[date] = frozenset(holidays or set())
+    if profile_name in ("cn_futures", "cn_futures_midnight"):
+        profile_holidays = frozenset(
+            merge_holidays(CN_FUTURES_HOLIDAYS_2026, holidays)
+        )
 
     if sessions is not None:
         resolved = [
@@ -292,7 +345,7 @@ def build_profile(
     return CalendarProfile(
         name=profile_name,
         sessions=tuple(resolved),
-        holidays=frozenset(holidays or set()),
+        holidays=profile_holidays,
         extra_trading_days=frozenset(extra_trading_days or set()),
         skip_weekend=skip_weekend,
     )

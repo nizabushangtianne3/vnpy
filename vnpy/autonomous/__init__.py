@@ -7,11 +7,13 @@ restarts, holidays and feed outages.
 """
 
 from .calendar import (
+    CN_FUTURES_HOLIDAYS_2026,
     CalendarProfile,
     Session,
     TradingCalendar,
     build_profile,
     load_holidays,
+    merge_holidays,
 )
 from .config import (
     AllocationConfig,
@@ -58,6 +60,7 @@ __all__ = [
     "AutonomousRunner",
     "CalendarProfile",
     "CapitalAllocator",
+    "CN_FUTURES_HOLIDAYS_2026",
     "CtaStatsAdapter",
     "EVENT_STRATEGY_SNAPSHOT",
     "GATEWAY_REGISTRY",
@@ -78,6 +81,7 @@ __all__ = [
     "ensure_utf8_output",
     "load_config",
     "load_holidays",
+    "merge_holidays",
     "read_state",
     "save_config",
     "atomic_write_json",

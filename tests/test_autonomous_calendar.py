@@ -2,10 +2,12 @@ import json
 from datetime import date, datetime, time
 
 from vnpy.autonomous.calendar import (
+    CN_FUTURES_HOLIDAYS_2026,
     Session,
     TradingCalendar,
     build_profile,
     load_holidays,
+    merge_holidays,
 )
 
 
@@ -106,3 +108,22 @@ def test_load_holidays_invalid_payload_raises(tmp_path) -> None:
         pass
     else:
         raise AssertionError("invalid holiday date must raise ValueError")
+
+
+def test_merge_holidays_combines_sources() -> None:
+    merged = merge_holidays(CN_FUTURES_HOLIDAYS_2026, {date(2027, 1, 1)})
+
+    assert date(2026, 10, 1) in merged
+    assert date(2027, 1, 1) in merged
+    assert isinstance(CN_FUTURES_HOLIDAYS_2026, frozenset)
+
+
+def test_build_profile_adds_builtin_2026_holidays() -> None:
+    profile = build_profile("cn_futures")
+
+    assert date(2026, 2, 17) in profile.holidays
+    assert date(2026, 10, 1) in profile.holidays
+    assert date(2027, 1, 1) not in profile.holidays
+
+    midnight_profile = build_profile("cn_futures_midnight")
+    assert date(2026, 5, 1) in midnight_profile.holidays

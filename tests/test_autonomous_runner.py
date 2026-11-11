@@ -1,7 +1,7 @@
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 
 from vnpy.autonomous.config import (
     AutonomousConfig,
@@ -294,6 +294,34 @@ def test_calendar_built_from_config_profile(tmp_path) -> None:
     runner = AutonomousRunner.from_config_file(str(path))
     assert runner.calendar.is_open(datetime(2026, 10, 9, 0, 30))
     assert runner.state_path == tmp_path / "autonomous_state.json"
+
+
+def test_calendar_includes_builtin_holidays(tmp_path) -> None:
+    config = AutonomousConfig(
+        gateways={GATEWAY_NAME: {}},
+        calendar={"profile": "cn_futures"},
+    )
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+
+    runner = AutonomousRunner.from_config_file(str(path))
+    assert runner.calendar.is_trading_day(date(2026, 10, 1)) is False
+
+
+def test_calendar_merges_user_holiday_file(tmp_path) -> None:
+    (tmp_path / "extra.json").write_text(
+        json.dumps(["2027-01-01"]), encoding="utf-8"
+    )
+    config = AutonomousConfig(
+        gateways={GATEWAY_NAME: {}},
+        calendar={"profile": "cn_futures", "holidays_file": "extra.json"},
+    )
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+
+    runner = AutonomousRunner.from_config_file(str(path))
+    assert runner.calendar.is_trading_day(date(2027, 1, 1)) is False
+    assert runner.calendar.is_trading_day(date(2026, 10, 1)) is False
 
 
 def test_trade_ledger_counts_total() -> None:

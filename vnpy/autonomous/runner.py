@@ -32,7 +32,14 @@ from vnpy.trader.logger import logger
 from vnpy.trader.object import LogData, OrderData, TradeData
 from vnpy.trader.setting import SETTINGS
 
-from .calendar import Session, TradingCalendar, build_profile, load_holidays
+from .calendar import (
+    CN_FUTURES_HOLIDAYS_2026,
+    Session,
+    TradingCalendar,
+    build_profile,
+    load_holidays,
+    merge_holidays,
+)
 from .config import AutonomousConfig, load_config
 from .event import EVENT_STRATEGY_SNAPSHOT, StrategySnapshot
 from .health import HealthMonitor
@@ -266,7 +273,12 @@ class AutonomousRunner:
         holidays_file: object = calendar_config.get("holidays_file")
         holidays: set | None = None
         if holidays_file:
-            holidays = load_holidays(self._holiday_path(str(holidays_file)))
+            # Built-in closure days stay in effect; a user file is additive
+            # so later-year entries do not silently erase current-year data.
+            holidays = merge_holidays(
+                load_holidays(self._holiday_path(str(holidays_file))),
+                CN_FUTURES_HOLIDAYS_2026,
+            )
 
         profile = build_profile(
             profile_name=profile_name,
