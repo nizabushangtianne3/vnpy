@@ -6,6 +6,9 @@ for real, not through mocks.
 """
 
 from datetime import datetime, timedelta
+import os
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -105,5 +108,22 @@ def test_parent_spawns_and_stops_real_child(tmp_path) -> None:
     finally:
         stop_event.set()
         thread.join(timeout=60)
+        _kill_leftover_child(state_path)
 
     assert not thread.is_alive()
+
+
+def _kill_leftover_child(state_path) -> None:
+    """Kill a spawned child that survived the supervisor shutdown."""
+    payload = read_state(state_path)
+    pid = payload.get("pid")
+    if not isinstance(pid, int) or pid == os.getpid():
+        return
+    if sys.platform != "win32":
+        return
+    result = subprocess.run(
+        ["taskkill", "/F", "/PID", str(pid)],
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode in (0, 128), result.stdout

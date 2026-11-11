@@ -493,6 +493,22 @@ class AutonomousRunner:
             self.guard.reset_daily()
         logger.info("[autonomous] 新交易日开始，日内风控计数器已重置")
 
+    def _close_engine_databases(self) -> None:
+        """Release database handles held by strategy engines.
+
+        On Windows an open sqlite handle blocks deleting or reopening the
+        database file, which would slow down the next session spawn.
+        """
+        for _app_name, engine in self._strategy_engines:
+            database: Any = getattr(engine, "database", None)
+            inner: Any = getattr(database, "db", None)
+            close: Any = getattr(inner, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:   # noqa: BLE001
+                    logger.warning("[autonomous] 关闭数据库连接失败：%s", exc)
+
     def _connect_gateways(self) -> None:
         """Connect every configured gateway."""
         self._active_session_day = None
@@ -857,6 +873,7 @@ class AutonomousRunner:
             if self.config.runtime.stop_strategies_on_exit:
                 self._stop_strategy_engines()
             self._write_state("stopping")
+            self._close_engine_databases()
             main_engine.close()
         event_engine: EventEngine | None = self.event_engine
         if event_engine is not None:
