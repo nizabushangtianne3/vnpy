@@ -107,6 +107,7 @@ def seed_contract(main_engine: MainEngine) -> None:
         pricetick=1,
         min_volume=1,
         max_volume=100,
+        net_position=False,
     )
     put(main_engine, EVENT_CONTRACT, contract)
     wait_until(lambda: main_engine.get_contract("rb2410.SHFE") is not None)
@@ -237,13 +238,18 @@ def test_daily_loss_breach_arms_and_flattens() -> None:
         # 新开仓被拦截
         assert main_engine.send_order(make_order(volume=1), "FAKE") == ""
 
-        # 熔断平仓发送限价平仓单（价格取最新价档）
-        close_orders = [order for order in gateway.orders if order.offset == Offset.CLOSE]
+        # 熔断平仓发送限价平仓单（价格取最新价档），
+        # SHFE 上由 OffsetConverter 拆分为平今/平昨
+        close_orders = [
+            order for order in gateway.orders
+            if order.offset in {Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY}
+        ]
         assert len(close_orders) == 1
         assert close_orders[0].volume == 2
         assert close_orders[0].direction == Direction.SHORT
         assert close_orders[0].type == OrderType.LIMIT
         assert close_orders[0].price > 0
+        assert close_orders[0].offset == Offset.CLOSETODAY
 
         # 活动委托被撤销
         assert len(gateway.cancels) == 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -304,7 +305,7 @@ class RiskGuard:
             )
             price: float = self._flatten_price(position, contract)
 
-            req: OrderRequest = OrderRequest(
+            original_req: OrderRequest = OrderRequest(
                 symbol=position.symbol,
                 exchange=position.exchange,
                 direction=close_direction,
@@ -315,10 +316,35 @@ class RiskGuard:
                 reference="risk_flatten",
             )
 
-            # Routes through the MainEngine wrapper so the offset converter
-            # splits SHFE/INE closes into close-today/close-yesterday and
-            # the risk checks still see this as a reduce-only order.
-            self.main_engine.send_order(req, position.gateway_name)
+            # The offset conversion happens here, not inside send_order.
+            # SHFE/INE require splitting a close into close-today and
+            # close-yesterday before each request reaches the gateway.
+            oms_engine: object | None = self.main_engine.get_engine("oms")
+            convert: Any = getattr(oms_engine, "convert_order_request", None)
+            if callable(convert):
+                req_list: list[OrderRequest] = convert(
+                    original_req, position.gateway_name, False, False
+                )
+            else:
+                req_list = [original_req]
+            req: OrderRequest
+            for req in req_list:
+                # Reduce-only close orders must not be blocked by the
+                # breaker itself when allow_reduce_when_armed is False.
+                ok, reason = self.check_order(req, position.gateway_name)
+                if not ok:
+                    logger.warning(
+                        "[风控] 熔断平仓委托被拦截：%s", reason
+                    )
+                    continue
+                vt_orderid: str = self.main_engine.send_order(
+                    req, position.gateway_name
+                )
+                if not vt_orderid:
+                    continue
+                self.main_engine.update_order_request(
+                    req, vt_orderid, position.gateway_name
+                )
 
     def _flatten_price(
         self, position: PositionData, contract: ContractData | None

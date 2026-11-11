@@ -24,6 +24,7 @@
 18. `status` 子命令输出新增 `guard_breached`：与 `guard_armed` 配合，运维无需打开状态文件即可区分「当前正在拦截」与「本时段曾触发熔断」
 19. 修复策略快照把累计 realized_pnl 当作单笔盈亏记入健康熔断的问题：当快照成交数增加时会按轮询频率重复记入累计值，导致日内亏损按倍数虚增并过早触发熔断；现在统一由 pnl 增量通道记录成交，附回归测试
 20. 修复风控熔断平仓在 SHFE/INE 上的两个拒单风险：平仓单从市价改为以盘口对手价（无行情时退回持仓价）的限价单，绕开 SHFE/INE 不支持市价单的限制；平仓委托改走 MainEngine 入口，由 OffsetConverter 自动拆分为平今/平昨，避免当日仓用普通平仓被拒单导致熔断平仓失败
+21. 修正风控熔断平仓的 OffsetConverter 接入路径：convert_order_request 位于 OmsEngine 而非 MainEngine，平仓流程现在正确调用 OmsEngine.convert_order_request 完成 SHFE/INE 平今/平昨拆分，并在拆分后对每笔请求执行风控校验，确保 allow_reduce_when_armed=False 时平仓单不会被熔断自身拦截
 
 ## 调整
 
