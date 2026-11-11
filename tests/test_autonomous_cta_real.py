@@ -5,11 +5,12 @@ green without the optional app package.
 """
 
 import time
+from datetime import datetime, timedelta
 
 import pytest
 
 from vnpy.autonomous.adapters.cta import CtaStatsAdapter
-from vnpy.autonomous.config import AutonomousConfig
+from vnpy.autonomous.config import AutonomousConfig, RuntimeConfig
 from vnpy.autonomous.runner import AutonomousRunner, resolve_app_class
 from vnpy.event import Event
 from vnpy.trader.constant import Direction, Exchange, Offset
@@ -133,6 +134,65 @@ def test_cta_engine_provisioning_and_snapshots() -> None:
 
         engine.stop_all_strategies()
         assert strategy.trading is False
+
+        # vnpy_sqlite 的 db 对象是模块级单例，释放连接避免影响后续用例
+        database = getattr(engine, "database", None)
+        if database is not None:
+            try:
+                database.db.close()
+            except Exception:   # noqa: BLE001
+                pass
+    finally:
+        main_engine.close()
+
+
+def test_cta_restart_keeps_halted_strategies_stopped() -> None:
+    main_engine = MainEngine()
+    try:
+        engine = main_engine.add_app(vnpy_ctastrategy.CtaStrategyApp)
+        engine.init_engine()
+        engine.classes["DemoStrategy"] = DemoStrategy
+
+        runner = AutonomousRunner(
+            AutonomousConfig(
+                gateways={},
+                apps=["CtaStrategy"],
+                app_settings={
+                    "CtaStrategy": {
+                        "strategies": [
+                            {
+                                "class_name": "DemoStrategy",
+                                "name": "halted_trend",
+                                "vt_symbol": "rb2410.SHFE",
+                                "setting": {},
+                            },
+                            {
+                                "class_name": "DemoStrategy",
+                                "name": "active_trend",
+                                "vt_symbol": "rb2410.SHFE",
+                                "setting": {},
+                            },
+                        ]
+                    }
+                },
+                runtime=RuntimeConfig(strategy_init_wait_secs=0),
+            )
+        )
+        runner.main_engine = main_engine
+        runner._strategy_engines = [("CtaStrategy", engine)]
+        runner._provision_strategies("CtaStrategy", engine)
+
+        # 模拟上一交易子进程留下来的当日健康状态：其中一个策略已熔断。
+        halted_at = datetime.now() - timedelta(minutes=5)
+        runner.health.halt("halted_trend", "连续亏损", halted_at)
+        runner.health.resume("halted_trend", force=True, when=halted_at)
+        runner.health.halt("halted_trend", "连续亏损", halted_at)
+        assert runner.health.is_halted("halted_trend") is True
+
+        runner._start_strategy_engines()
+        assert engine.strategies["halted_trend"].inited is True
+        assert engine.strategies["halted_trend"].trading is False
+        assert engine.strategies["active_trend"].trading is True
 
         # vnpy_sqlite 的 db 对象是模块级单例，释放连接避免影响后续用例
         database = getattr(engine, "database", None)

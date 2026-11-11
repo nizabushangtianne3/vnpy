@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import threading
+from concurrent.futures import wait as wait_futures
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -624,6 +625,7 @@ class AutonomousRunner:
         runtime: Any = self.config.runtime
         engine: Any
         app_name: str
+        init_futures: dict[Any, Any] = {}
         for app_name, engine in self._strategy_engines:
             if hasattr(engine, "init_engine"):
                 try:
@@ -637,17 +639,51 @@ class AutonomousRunner:
             self._provision_strategies(app_name, engine)
             if hasattr(engine, "init_all_strategies"):
                 try:
-                    engine.init_all_strategies()
+                    futures: Any = engine.init_all_strategies()
+                    if futures:
+                        init_futures.update(futures)
                 except Exception as exc:   # noqa: BLE001
                     logger.warning(
                         "[autonomous] 引擎 %s 策略初始化失败：%s", app_name, exc
                     )
 
         if self._strategy_engines and runtime.strategy_init_wait_secs > 0:
-            time.sleep(runtime.strategy_init_wait_secs)
+            if init_futures:
+                _, not_done = wait_futures(
+                    init_futures.values(), timeout=runtime.strategy_init_wait_secs
+                )
+                if not_done:
+                    logger.warning(
+                        "[autonomous] 策略初始化等待超时：%d 个未完成",
+                        len(not_done),
+                    )
+            else:
+                time.sleep(runtime.strategy_init_wait_secs)
+        elif init_futures:
+            wait_futures(init_futures.values(), timeout=0.1)
+
+        halted_names: set[str] = {
+            name
+            for name, data in self.health.snapshot().items()
+            if isinstance(data, dict) and data.get("halted")
+        }
+        if halted_names:
+            logger.warning(
+                "[autonomous] 重启后保持熔断策略停用：%s",
+                ", ".join(sorted(halted_names)),
+            )
 
         for _app_name, engine in self._strategy_engines:
-            if hasattr(engine, "start_all_strategies"):
+            start_strategy: Any = getattr(engine, "start_strategy", None)
+            strategy_names: object = getattr(engine, "strategies", None)
+            if callable(start_strategy) and isinstance(strategy_names, dict):
+                for strategy_name in list(strategy_names):
+                    if not isinstance(strategy_name, str):
+                        continue
+                    if strategy_name in halted_names:
+                        continue
+                    start_strategy(strategy_name)
+            elif hasattr(engine, "start_all_strategies"):
                 engine.start_all_strategies()
 
     def _provision_strategies(self, app_name: str, engine: Any) -> None:

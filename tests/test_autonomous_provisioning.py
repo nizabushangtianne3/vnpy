@@ -180,7 +180,7 @@ def test_runner_provisions_strategies_from_config(tmp_path) -> None:
         # 引擎完成标准初始化序列
         assert engine.inited_engine is True
         assert engine.inited_all is True
-        assert engine.started_all is True
+        assert sorted(engine.resumed) == ["AutoNamed_rb2601", "demo_trend"]
 
         # 合法条目完成装配，非法条目被跳过且不影响其他条目
         assert engine.provisioned == [
