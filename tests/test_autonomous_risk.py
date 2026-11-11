@@ -237,11 +237,13 @@ def test_daily_loss_breach_arms_and_flattens() -> None:
         # 新开仓被拦截
         assert main_engine.send_order(make_order(volume=1), "FAKE") == ""
 
-        # 熔断平仓发送市价平仓单
+        # 熔断平仓发送限价平仓单（价格取最新价档）
         close_orders = [order for order in gateway.orders if order.offset == Offset.CLOSE]
         assert len(close_orders) == 1
         assert close_orders[0].volume == 2
         assert close_orders[0].direction == Direction.SHORT
+        assert close_orders[0].type == OrderType.LIMIT
+        assert close_orders[0].price > 0
 
         # 活动委托被撤销
         assert len(gateway.cancels) == 1

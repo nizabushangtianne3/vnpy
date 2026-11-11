@@ -15,11 +15,13 @@ from vnpy.trader.logger import logger
 from vnpy.trader.object import (
     AccountData,
     CancelRequest,
+    ContractData,
     OrderData,
     OrderRequest,
     PositionData,
     TradeData,
 )
+from vnpy.trader.utility import round_to
 
 from .config import RiskLimits
 
@@ -297,19 +299,52 @@ class RiskGuard:
             else:
                 close_direction = Direction.LONG
 
+            contract: ContractData | None = self.main_engine.get_contract(
+                position.vt_symbol
+            )
+            price: float = self._flatten_price(position, contract)
+
             req: OrderRequest = OrderRequest(
                 symbol=position.symbol,
                 exchange=position.exchange,
                 direction=close_direction,
-                type=OrderType.MARKET,
+                type=OrderType.LIMIT,
                 volume=position.volume,
-                price=0,
+                price=price,
                 offset=Offset.CLOSE,
                 reference="risk_flatten",
             )
-            original: Callable[[OrderRequest, str], str] | None = self._original_send_order
-            if original is not None:
-                original(req, position.gateway_name)
+
+            # Routes through the MainEngine wrapper so the offset converter
+            # splits SHFE/INE closes into close-today/close-yesterday and
+            # the risk checks still see this as a reduce-only order.
+            self.main_engine.send_order(req, position.gateway_name)
+
+    def _flatten_price(
+        self, position: PositionData, contract: ContractData | None
+    ) -> float:
+        """Return a marketable limit price for an urgent close.
+
+        Uses the opposite side of the book (crossing the spread) so the
+        order fills immediately like a market order, but remains legal on
+        SHFE/INE which reject true market orders. Falls back to last price
+        or the recorded position price when no tick is available.
+        """
+        if contract is not None and contract.pricetick > 0:
+            tick = self.main_engine.get_tick(position.vt_symbol)
+            if tick is not None:
+                if position.direction == Direction.LONG:
+                    base_price: float = tick.bid_price_1 or tick.last_price
+                else:
+                    base_price = tick.ask_price_1 or tick.last_price
+                if base_price > 0:
+                    return round_to(base_price, contract.pricetick)
+
+            base_price = position.price
+            if base_price > 0:
+                return round_to(base_price, contract.pricetick)
+
+        return position.price
 
     def cancel_all_active_orders(self) -> None:
         """Cancel every active order through the main engine."""
