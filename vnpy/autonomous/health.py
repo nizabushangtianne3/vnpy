@@ -193,11 +193,81 @@ class HealthMonitor:
                     "error_count": health.error_count,
                     "halted": health.halted,
                     "halt_reason": health.halt_reason,
+                    "halted_at": (
+                        health.halted_at.isoformat() if health.halted_at else None
+                    ),
                     "win_rate": (
                         health.wins / health.trades if health.trades else 0.0
                     ),
                 }
             return result
+
+    def restore(
+        self,
+        payload: dict[str, dict[str, object]],
+        session_day: str | None = None,
+    ) -> None:
+        """Restore persisted health counters, e.g. after a child restart.
+
+        Only accepted when the payload was written today (``session_day``
+        matches the clock date): yesterday's halt state and daily counters
+        must not leak into today's decisions. The restore happens before
+        strategies are started, so a strategy that was halted when the
+        previous process died stays paused.
+        """
+        if not session_day or self._clock().date().isoformat() != session_day:
+            return
+
+        with self._lock:
+            for name, data in payload.items():
+                if not isinstance(name, str) or not isinstance(data, dict):
+                    continue
+                halted_at_raw: object = data.get("halted_at")
+                halted_at: datetime | None = None
+                if isinstance(halted_at_raw, str):
+                    try:
+                        halted_at = datetime.fromisoformat(halted_at_raw)
+                    except ValueError:
+                        continue
+                elif halted_at_raw is not None:
+                    continue
+
+                health: StrategyHealth = self._strategies.setdefault(
+                    name, StrategyHealth(name=name)
+                )
+                trades_obj: object = data.get("trades")
+                health.trades = int(trades_obj) if isinstance(trades_obj, int) else 0
+                wins_obj: object = data.get("wins")
+                health.wins = int(wins_obj) if isinstance(wins_obj, int) else 0
+                losses_obj: object = data.get("losses")
+                health.losses = int(losses_obj) if isinstance(losses_obj, int) else 0
+                realized = data.get("realized_pnl")
+                if isinstance(realized, (int, float)):
+                    health.realized_pnl = float(realized)
+                daily = data.get("daily_pnl")
+                if isinstance(daily, (int, float)):
+                    health.daily_pnl = float(daily)
+                health.daily_reset_date = self._clock().date()
+                consecutive_obj: object = data.get("consecutive_losses")
+                health.consecutive_losses = (
+                    int(consecutive_obj)
+                    if isinstance(consecutive_obj, int)
+                    else 0
+                )
+                error_obj: object = data.get("error_count")
+                health.error_count = (
+                    int(error_obj) if isinstance(error_obj, int) else 0
+                )
+                if halted_at is not None:
+                    health.halted = True
+                    health.halt_reason = str(data.get("halt_reason", ""))
+                    health.halted_at = halted_at
+
+        callback: Callable[[str, str], None] | None = self._pause_callback
+        if callback is not None:
+            for name, data in payload.items():
+                if isinstance(name, str) and data.get("halted"):
+                    callback(name, str(data.get("halt_reason", "")))
 
     # ------------------------------------------------------------ internal
 

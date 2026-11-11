@@ -15,6 +15,7 @@ from vnpy.autonomous.runner import (
     TradeLedger,
     import_component,
     read_state,
+    restore_health_state,
     resolve_gateway_class,
 )
 from vnpy.autonomous.risk import RiskGuard
@@ -322,6 +323,62 @@ def test_calendar_merges_user_holiday_file(tmp_path) -> None:
     runner = AutonomousRunner.from_config_file(str(path))
     assert runner.calendar.is_trading_day(date(2027, 1, 1)) is False
     assert runner.calendar.is_trading_day(date(2026, 10, 1)) is False
+
+
+def test_restore_health_reapplies_today_halt(tmp_path) -> None:
+    """A halted strategy must stay halted across a same-day child restart."""
+    config = AutonomousConfig(gateways={GATEWAY_NAME: {}})
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+    runner = AutonomousRunner.from_config_file(str(path))
+    runner.health.register_strategy("trend")
+    runner.health.halt("trend", "连续亏损", datetime(2026, 10, 9, 10, 0))
+    state = {
+        "session_day": "2026-10-09",
+        "health": runner.health.snapshot(),
+    }
+    (tmp_path / "autonomous_state.json").write_text(
+        json.dumps(state), encoding="utf-8"
+    )
+
+    # Simulate a fresh child process: new monitor, same state file.
+    fresh_runner = AutonomousRunner.from_config_file(str(path))
+    assert fresh_runner.health.is_halted("trend") is False
+    frozen_now = datetime(2026, 10, 9, 12, 0)
+    fresh_runner.health._clock = lambda: frozen_now  # type: ignore[method-assign]
+    restore_health_state(fresh_runner.health, runner.state_path)
+    assert fresh_runner.health.is_halted("trend") is True
+    health = fresh_runner.health.get_health("trend")
+    assert health is not None
+    assert health.halt_reason == "连续亏损"
+    assert health.halted_at is not None
+    assert health.halted_at.isoformat().startswith("2026-10-09")
+
+
+def test_restore_health_stale_day_ignored(tmp_path) -> None:
+    """Yesterday's halt payload must not bleed into today."""
+    config = AutonomousConfig(gateways={GATEWAY_NAME: {}})
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+    runner = AutonomousRunner.from_config_file(str(path))
+    stale_state = tmp_path / "stale.json"
+    stale_state.write_text(
+        json.dumps(
+            {
+                "session_day": "2020-01-01",
+                "health": {
+                    "trend": {
+                        "halted": True,
+                        "halt_reason": "昨日熔断",
+                        "halted_at": "2020-01-01T10:00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    restore_health_state(runner.health, stale_state)
+    assert runner.health.is_halted("trend") is False
 
 
 def test_trade_ledger_counts_total() -> None:

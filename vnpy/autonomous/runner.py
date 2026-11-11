@@ -453,6 +453,7 @@ class AutonomousRunner:
         self.guard.install()
         self.guard.register_events(self.event_engine)
         restore_risk_state(self.guard, self.state_path)
+        restore_health_state(self.health, self.state_path)
 
         self.health.set_pause_callback(self._pause_strategy)
         self.health.set_resume_callback(self._resume_strategy)
@@ -1135,3 +1136,26 @@ def restore_risk_state(guard: RiskGuard, state_path: Path) -> None:
     if not isinstance(guard_data, dict):
         return
     guard.restore(guard_data)
+
+
+def restore_health_state(health: HealthMonitor, state_path: Path) -> None:
+    """Re-apply today's persisted health counters after a child restart.
+
+    Restoring before strategies start ensures a strategy that was halted
+    when the previous process died is paused again instead of being
+    restarted by ``start_all_strategies``.
+    """
+    payload: dict[str, object] = read_state(state_path)
+    session_day: object = payload.get("session_day")
+    health_data: object = payload.get("health")
+    if not isinstance(health_data, dict):
+        return
+    typed_health: dict[str, dict[str, object]] = {
+        str(name): value
+        for name, value in health_data.items()
+        if isinstance(value, dict)
+    }
+    health.restore(
+        typed_health,
+        session_day=str(session_day) if session_day else None,
+    )
