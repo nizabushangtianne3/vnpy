@@ -810,13 +810,6 @@ class AutonomousRunner:
         self.allocator.register_strategy(snapshot.strategy_name)
         if snapshot.equity is not None:
             self.health.record_equity(snapshot.strategy_name, snapshot.equity)
-        if snapshot.trades is not None:
-            health = self.health.get_health(snapshot.strategy_name)
-            if health is not None and health.trades < snapshot.trades:
-                self.health.record_trade(
-                    snapshot.strategy_name,
-                    snapshot.realized_pnl or 0.0,
-                )
         if snapshot.error:
             self.health.record_error(snapshot.strategy_name)
         if snapshot.equity is not None:

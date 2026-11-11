@@ -308,3 +308,38 @@ def test_read_state_missing_file(tmp_path) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert read_state(path) == payload
+
+
+def test_snapshot_cumulative_trades_do_not_inflate_health() -> None:
+    """Cumulative snapshots must not be recorded as per-trade pnl.
+
+    The snapshot adapter publishes a running ``trades`` counter and a
+    cumulative ``realized_pnl``. Recording the cumulative value each time
+    the counter advances would multiply daily loss by the poll rate and
+    trip the health breaker far too early.
+    """
+    runner = AutonomousRunner(
+        AutonomousConfig(gateways={}),
+    )
+    from vnpy.autonomous.event import StrategySnapshot
+    from vnpy.event import Event
+
+    for trades, pnl in ((0, 0.0), (1, -50.0), (2, -100.0)):
+        runner._process_snapshot_event(
+            Event(
+                "eStrategySnapshot",
+                StrategySnapshot(
+                    strategy_name="trend",
+                    trades=trades,
+                    realized_pnl=pnl,
+                    equity=1000.0,
+                ),
+            )
+        )
+
+    health = runner.health.get_health("trend")
+    assert health is not None
+    # 初始播种不计，两笔成交各按增量 -50 记录
+    assert health.trades == 2
+    assert health.realized_pnl == -100.0
+    assert health.consecutive_losses == 2
