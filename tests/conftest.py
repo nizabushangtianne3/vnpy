@@ -27,8 +27,13 @@ SETTINGS["log.console"] = False
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     os.chdir(ORIGINAL_CWD)
-    _close_database_singletons()
-    _cleanup_temp_dir()
+    try:
+        _close_database_singletons()
+        _cleanup_temp_dir()
+    except Exception as exc:
+        # Teardown must never fail the run; CI stdout is cp1252, so keep the
+        # message ASCII-safe (!a escapes non-ASCII).
+        print(f"[conftest] teardown skipped: {exc!a}")
 
 
 def _close_database_singletons() -> None:
@@ -43,6 +48,17 @@ def _close_database_singletons() -> None:
     except Exception:
         pass
 
+    try:
+        import vnpy_ctastrategy.engine as cta_engine_module
+
+        wrapper = getattr(cta_engine_module, "database", None)
+        inner = getattr(wrapper, "db", None)
+        state = getattr(inner, "_state", None)
+        if inner is not None and state is not None and not state.closed:
+            inner.close()
+    except Exception:
+        pass
+
 
 def _cleanup_temp_dir() -> None:
     """Clean the trader temp dir, tolerating slow Windows file locks."""
@@ -53,8 +69,8 @@ def _cleanup_temp_dir() -> None:
         except PermissionError:
             if attempt == 2:
                 print(
-                    "[conftest] 临时目录清理失败，文件仍被占用："
-                    f"{TRADER_TEMP_DIR.name}"
+                    "[conftest] temp dir cleanup skipped, file still locked: "
+                    f"{TRADER_TEMP_DIR.name!a}"
                 )
                 return
             time.sleep(1.0)
