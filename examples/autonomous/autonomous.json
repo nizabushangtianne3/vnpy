@@ -52,7 +52,8 @@
     "notify_on_error": true,
     "notify_on_breach": true,
     "notify_on_session_end": true,
-    "heartbeat_secs": 1800
+    "heartbeat_secs": 1800,
+    "webhook_url": ""
   },
   "runtime": {
     "poll_interval_secs": 1.0,

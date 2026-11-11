@@ -106,6 +106,7 @@ class NotificationConfig:
     notify_on_breach: bool = True
     notify_on_session_end: bool = True
     heartbeat_secs: int = 1800
+    webhook_url: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> NotificationConfig:

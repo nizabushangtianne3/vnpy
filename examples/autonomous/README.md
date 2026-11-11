@@ -104,7 +104,7 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 ### `notification`
 
-复用 `MainEngine.send_notification`，按 `vt_setting.json` 里的邮件/微信配置发送。`heartbeat_secs` 控制心跳通知间隔。
+复用 `MainEngine.send_notification`，按 `vt_setting.json` 里的邮件/微信配置发送。`heartbeat_secs` 控制心跳通知间隔。`webhook_url` 配置后额外 POST `{source, mode, message}` JSON（超时 5 秒，失败只记日志），父级守护进程在主引擎创建前也能推送重启与看门狗告警，适合接企业微信/钉钉/Telegram bot。
 
 ### `runtime`
 

@@ -1015,6 +1015,7 @@ class AutonomousRunner:
                     main_engine.send_notification(
                         message, subject="VeighNa Autonomous Trading"
                     )
+                    self._send_webhook(message)
                     return
 
                 # 未配置邮件时 send_notification 仍会拉起 SMTP 线程，且
@@ -1029,9 +1030,40 @@ class AutonomousRunner:
                     wechat.send_wechat(
                         f"VeighNa Autonomous Trading\n{message}"
                     )
+                    self._send_webhook(message)
+                    return
             except Exception as exc:   # noqa: BLE001
                 logger.warning("[autonomous] 通知发送失败：%s", exc)
-                return
+        # Webhook is independent of the main engine, so the parent supervisor
+        # can push restarts, watchdog alerts and session changes even when
+        # neither email nor wechat is configured.
+        self._send_webhook(message)
+
+    def _send_webhook(self, message: str) -> None:
+        """POST the message to the configured webhook endpoint, if any."""
+        webhook_url: str = self.config.notification.webhook_url
+        if not webhook_url:
+            return
+        try:
+            import requests
+
+            response = requests.post(
+                webhook_url,
+                json={
+                    "source": "vnpy.autonomous",
+                    "mode": self.config.mode,
+                    "message": message,
+                },
+                timeout=5,
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "[autonomous] webhook 返回 %s：%s",
+                    response.status_code,
+                    response.text[:200],
+                )
+        except Exception as exc:   # noqa: BLE001
+            logger.warning("[autonomous] webhook 发送失败：%s", exc)
 
     def _require_engine(self) -> MainEngine:
         """Return the live main engine or raise."""
