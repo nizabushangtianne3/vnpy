@@ -182,6 +182,7 @@ class AutonomousRunner:
         self.ledger: TradeLedger = TradeLedger()
         self._last_parent_state: str = ""
         self._last_restart_limit_notice: datetime | None = None
+        self._restart_limit_at: datetime | None = None
 
         self._strategy_engines: list[Any] = []
         self._stats_adapters: list[Any] = []
@@ -283,13 +284,14 @@ class AutonomousRunner:
                 if session_day != self._last_session_day:
                     self._last_session_day = session_day
                     self.restarts_in_session = 0
+                    self._restart_limit_at = None
 
                 in_session: bool = session_day is not None
 
                 if in_session:
                     if child is None or not child.is_alive():
                         if self.restarts_in_session >= runtime.max_restarts_per_session:
-                            self._write_parent_state("restart_limit")
+                            self._handle_restart_limit(runtime)
                             if child is not None:
                                 child.join(timeout=5)
                                 child = None
@@ -858,6 +860,32 @@ class AutonomousRunner:
                 "已达上限，等待下一个交易时段"
             )
         self._write_state(status, parent=True)
+
+    def _handle_restart_limit(self, runtime: Any) -> None:
+        """Pause spawning after too many restarts, then recover by cooldown.
+
+        Without recovery a burst of early crashes (bad config, feed outage at
+        session start) would idle the supervisor for the rest of the trading
+        day and silently miss every session.
+        """
+        now: datetime = datetime.now()
+        if self._restart_limit_at is None:
+            self._restart_limit_at = now
+            self._write_parent_state("restart_limit")
+            logger.warning(
+                "[autonomous] 同一交易时段内重启达到 %d 次上限，进入冷却",
+                runtime.max_restarts_per_session,
+            )
+            return
+
+        cooldown: float = max(float(runtime.restart_backoff_secs), 30.0)
+        if (now - self._restart_limit_at).total_seconds() < cooldown:
+            return
+
+        self.restarts_in_session = 0
+        self._restart_limit_at = None
+        logger.info("[autonomous] 重启冷却结束，重置计数并重试拉起子进程")
+        self._notify("交易子进程重启冷却结束，已重置重启计数并重试")
 
     def _state_payload(self, status: str, parent: bool = False) -> dict[str, object]:
         """Assemble the runtime state payload."""
