@@ -1,4 +1,5 @@
 import os
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -26,4 +27,34 @@ SETTINGS["log.console"] = False
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     os.chdir(ORIGINAL_CWD)
-    TRADER_TEMP_DIR.cleanup()
+    _close_database_singletons()
+    _cleanup_temp_dir()
+
+
+def _close_database_singletons() -> None:
+    """Best-effort release of sqlite handles opened by app engines."""
+    try:
+        import vnpy_sqlite.sqlite_database as sqlite_module
+
+        db = getattr(sqlite_module, "db", None)
+        state = getattr(db, "_state", None)
+        if db is not None and state is not None and not state.closed:
+            db.close()
+    except Exception:
+        pass
+
+
+def _cleanup_temp_dir() -> None:
+    """Clean the trader temp dir, tolerating slow Windows file locks."""
+    for attempt in range(3):
+        try:
+            TRADER_TEMP_DIR.cleanup()
+            return
+        except PermissionError:
+            if attempt == 2:
+                print(
+                    "[conftest] 临时目录清理失败，文件仍被占用："
+                    f"{TRADER_TEMP_DIR.name}"
+                )
+                return
+            time.sleep(1.0)

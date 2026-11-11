@@ -90,6 +90,7 @@ def test_parent_spawns_and_stops_real_child(tmp_path) -> None:
 
     thread = threading.Thread(target=runner.run_parent, daemon=True)
     thread.start()
+    payload: dict = {}
     try:
         def child_ready():
             payload = read_state(state_path)
@@ -100,30 +101,31 @@ def test_parent_spawns_and_stops_real_child(tmp_path) -> None:
                 return payload
             return None
 
-        # 父进程先写 supervising/child_running，子进程随后写自己的状态
-        payload = wait_for(child_ready)
+        # 父进程先写 supervising/child_running，子进程随后写自己的状态；
+        # spawn 在负载高的机器上可能很慢，给足超时
+        payload = wait_for(child_ready, timeout=120.0)
         assert payload is not None, "子进程状态未在超时内出现"
         assert payload["session"] == "all_day"
         assert payload["strategy_engines"] >= 1
     finally:
         stop_event.set()
         thread.join(timeout=60)
-        _kill_leftover_child(state_path)
+        killed = _kill_leftover_child(payload.get("pid"))
+        print("CHILD_KILL_RESULT:", killed)
 
     assert not thread.is_alive()
 
 
-def _kill_leftover_child(state_path) -> None:
+def _kill_leftover_child(pid) -> str:
     """Kill a spawned child that survived the supervisor shutdown."""
-    payload = read_state(state_path)
-    pid = payload.get("pid")
     if not isinstance(pid, int) or pid == os.getpid():
-        return
+        return "skipped"
     if sys.platform != "win32":
-        return
+        return "skipped"
     result = subprocess.run(
         ["taskkill", "/F", "/PID", str(pid)],
         capture_output=True,
         timeout=30,
     )
     assert result.returncode in (0, 128), result.stdout
+    return "killed" if result.returncode == 0 else "already_dead"

@@ -249,6 +249,34 @@ def test_session_start_resets_guard_daily_baseline(tmp_path) -> None:
         main_engine.close()
 
 
+def test_atomic_write_json_survives_concurrent_readers(tmp_path) -> None:
+    from vnpy.autonomous.runner import atomic_write_json
+
+    target = tmp_path / "state.json"
+    atomic_write_json(target, {"n": 0})
+
+    stop = threading.Event()
+    problems: list[str] = []
+
+    def reader() -> None:
+        while not stop.is_set():
+            if not read_state(target):
+                problems.append("empty")
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    try:
+        for index in range(80):
+            atomic_write_json(target, {"n": index})
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+    assert problems == []
+    assert read_state(target)["n"] == 79
+
+
 def test_calendar_built_from_config_profile(tmp_path) -> None:
     config = AutonomousConfig(
         gateways={GATEWAY_NAME: {}},

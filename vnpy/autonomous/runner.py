@@ -149,6 +149,28 @@ class TradeLedger:
         return self.trades.get(strategy_name, 0)
 
 
+def atomic_write_json(path: Path, payload: dict[str, object]) -> None:
+    """Write JSON atomically, tolerating concurrent readers on Windows.
+
+    os.replace fails with PermissionError while any reader holds the target
+    file open, which happens whenever an external watchdog polls the state
+    file, so retry with a short backoff before giving up.
+    """
+    temp_path: Path = path.with_name(path.name + ".tmp")
+    last_error: OSError | None = None
+    for attempt in range(5):
+        try:
+            with open(temp_path, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+            os.replace(temp_path, path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.02 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
 def child_entry(config_path: str) -> None:
     """Multiprocessing entry point for the trading child process."""
     runner: AutonomousRunner = AutonomousRunner.from_config_file(config_path)
@@ -297,8 +319,7 @@ class AutonomousRunner:
                     if child is not None and child.is_alive():
                         child.terminate()
                     if child is not None:
-                        # 等待子进程真正退出，避免它仍持有数据库文件句柄
-                        child.join(timeout=10)
+                        self._terminate_child(child)
                     self._write_parent_state("stopped")
                     return
                 now: datetime = datetime.now()
@@ -331,8 +352,7 @@ class AutonomousRunner:
                             child.join(timeout=runtime.restart_backoff_secs)
                         if child.is_alive():
                             logger.warning("[autonomous] 子进程未能在时段结束后退出，强制结束")
-                            child.terminate()
-                            child.join(timeout=10)
+                            self._terminate_child(child)
                         child = None
                         self.restarts_in_session = 0
                         self._write_parent_state("idle_between_sessions")
@@ -340,12 +360,24 @@ class AutonomousRunner:
                 time.sleep(poll)
             except KeyboardInterrupt:
                 logger.info("[autonomous] 父级守护进程收到退出信号")
-                if child is not None and child.is_alive():
-                    child.terminate()
                 if child is not None:
-                    child.join(timeout=10)
+                    self._terminate_child(child)
                 self._write_parent_state("stopped")
                 return
+
+    @staticmethod
+    def _terminate_child(child: multiprocessing.process.BaseProcess) -> None:
+        """Terminate a child and wait until it is really gone.
+
+        A killed child may still hold the sqlite file handle for a moment on
+        Windows; waiting avoids teardown races for the next session.
+        """
+        if child.is_alive():
+            child.terminate()
+        child.join(timeout=5)
+        if child.is_alive():
+            child.terminate()
+            child.join(timeout=10)
 
     def _spawn_child(self) -> multiprocessing.process.BaseProcess:
         """Spawn the trading child process."""
@@ -372,8 +404,7 @@ class AutonomousRunner:
         """Persist the in-memory config so the child can reload it."""
         target: Path = self.state_path.parent / "autonomous.runtime.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as file:
-            json.dump(self.config.to_dict(), file, ensure_ascii=False, indent=2)
+        atomic_write_json(target, self.config.to_dict())
         return target
 
     def _check_child_state_freshness(self) -> None:
@@ -969,12 +1000,7 @@ class AutonomousRunner:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             payload: dict[str, object] = self._state_payload(status, parent)
-            temp_path: Path = self.state_path.with_name(
-                self.state_path.name + ".tmp"
-            )
-            with open(temp_path, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
-            os.replace(temp_path, self.state_path)
+            atomic_write_json(self.state_path, payload)
         except OSError as exc:
             logger.warning("[autonomous] 状态文件写入失败：%s", exc)
 
@@ -1026,13 +1052,19 @@ class AutonomousRunner:
 def read_state(path: str | Path) -> dict[str, object]:
     """Read a runtime state file, returning an empty dict when missing."""
     state_path: Path = Path(path)
-    if not state_path.exists():
-        return {}
-    try:
-        with open(state_path, encoding="utf-8") as file:
-            payload: object = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return {}
+    for attempt in range(5):
+        try:
+            with open(state_path, encoding="utf-8") as file:
+                payload: object = json.load(file)
+            break
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError):
+            # The writer swaps the file atomically; a reader can hit the
+            # brief window on Windows, so retry before giving up.
+            if attempt == 4:
+                return {}
+            time.sleep(0.01 * (attempt + 1))
     if isinstance(payload, dict):
         return {str(k): v for k, v in payload.items()}
     return {}
