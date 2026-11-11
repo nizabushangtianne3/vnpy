@@ -567,6 +567,7 @@ def _format_state_line(payload: dict) -> str:
         f"restarts={payload.get('restarts_in_session')} "
         f"strategies={payload.get('strategy_engines')} "
         f"guard_armed={guard.get('armed')} health_halted={health.get('halted')}"
+        f" guard_breached={guard.get('breached', False)}"
     )
 
 

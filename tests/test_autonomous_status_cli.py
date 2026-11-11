@@ -81,6 +81,7 @@ def test_format_state_line_reports_fresh_heartbeat() -> None:
     assert "status=supervising" in line
     assert "heartbeat_age=0s" in line
     assert "guard_armed=False" in line
+    assert "guard_breached=False" in line
     assert "health_halted=False" in line
 
 
