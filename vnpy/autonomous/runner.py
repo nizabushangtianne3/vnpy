@@ -183,6 +183,8 @@ class AutonomousRunner:
         self._last_restart_limit_notice: datetime | None = None
 
         self._strategy_engines: list[Any] = []
+        self._stats_adapters: list[Any] = []
+        self._last_strategy_pnl: dict[str, float] = {}
         self._gateway_last_event: dict[str, datetime] = {}
         self._last_reconnect_attempt: dict[str, datetime] = {}
         self._heartbeat_at: datetime | None = None
@@ -441,6 +443,7 @@ class AutonomousRunner:
             self.health.resume_all_due()
             self._heartbeat(now)
             self._check_watchdog(now)
+            self._publish_strategy_snapshots()
 
             time.sleep(poll)
 
@@ -477,6 +480,13 @@ class AutonomousRunner:
             engine: Any = main_engine.add_app(app_class)
             if hasattr(engine, "init_engine") or hasattr(engine, "init_all_strategies"):
                 self._strategy_engines.append(engine)
+            strategies_attr: Any = getattr(engine, "strategies", None)
+            if isinstance(strategies_attr, dict):
+                from .adapters.cta import CtaStatsAdapter
+
+                self._stats_adapters.append(
+                    CtaStatsAdapter(engine, self._require_event_engine())
+                )
             logger.info("[autonomous] 应用模块 %s 已加载", app_name)
 
     def _wait_for_contracts(self) -> None:
@@ -512,6 +522,23 @@ class AutonomousRunner:
         for engine in self._strategy_engines:
             if hasattr(engine, "stop_all_strategies"):
                 engine.stop_all_strategies()
+
+    def _publish_strategy_snapshots(self) -> None:
+        """Publish per-strategy snapshots for health and allocation."""
+        adapter: Any
+        for adapter in self._stats_adapters:
+            publish: Any = getattr(adapter, "publish_snapshots", None)
+            if callable(publish):
+                try:
+                    publish()
+                except Exception as exc:   # noqa: BLE001
+                    logger.warning("[autonomous] 策略快照发布失败：%s", exc)
+
+    def _require_event_engine(self) -> EventEngine:
+        """Return the live event engine or raise."""
+        if self.event_engine is None:
+            raise RuntimeError("EventEngine 尚未创建")
+        return self.event_engine
 
     def _pause_strategy(self, strategy_name: str, reason: str) -> None:
         """Pause one strategy through its engine."""
@@ -574,6 +601,8 @@ class AutonomousRunner:
         snapshot: StrategySnapshot = event.data
         self.health.register_strategy(snapshot.strategy_name)
         self.allocator.register_strategy(snapshot.strategy_name)
+        if snapshot.equity is not None:
+            self.health.record_equity(snapshot.strategy_name, snapshot.equity)
         if snapshot.trades is not None:
             health = self.health.get_health(snapshot.strategy_name)
             if health is not None and health.trades < snapshot.trades:
@@ -585,6 +614,24 @@ class AutonomousRunner:
             self.health.record_error(snapshot.strategy_name)
         if snapshot.equity is not None:
             self.allocator.record_equity(snapshot.strategy_name, snapshot.equity)
+            self._record_pnl_delta(snapshot)
+
+    def _record_pnl_delta(self, snapshot: StrategySnapshot) -> None:
+        """Record realized pnl changes as single health trades."""
+        if snapshot.realized_pnl is None:
+            return
+
+        name: str = snapshot.strategy_name
+        last: float | None = self._last_strategy_pnl.get(name)
+        self._last_strategy_pnl[name] = snapshot.realized_pnl
+        if last is None:
+            # First observation only seeds the baseline.
+            return
+
+        delta: float = snapshot.realized_pnl - last
+        if abs(delta) < 1e-9:
+            return
+        self.health.record_trade(name, delta)
 
     def _monitor_gateway_events(self, event: Event) -> None:
         """Track last event time per gateway for the watchdog."""

@@ -25,6 +25,7 @@ from .config import (
     validate_config,
 )
 from .event import EVENT_STRATEGY_SNAPSHOT, StrategySnapshot
+from .adapters.cta import CtaStatsAdapter
 from .health import HealthMonitor, StrategyHealth
 from .portfolio import CapitalAllocator
 from .risk import RiskGuard, RiskState
@@ -45,6 +46,7 @@ __all__ = [
     "AutonomousRunner",
     "CalendarProfile",
     "CapitalAllocator",
+    "CtaStatsAdapter",
     "EVENT_STRATEGY_SNAPSHOT",
     "GATEWAY_REGISTRY",
     "HealthMonitor",

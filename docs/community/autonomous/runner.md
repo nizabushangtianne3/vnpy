@@ -39,3 +39,11 @@ event_engine.put(Event(
 ```
 
 `python -m vnpy.autonomous sessions` 可查看内置接口/模块清单与后续开盘时间。
+
+## 策略统计适配器
+
+加载的引擎若暴露 `strategies` 字典（`vnpy_ctastrategy` 的 CtaEngine 即是），运行器会自动挂载 `vnpy.autonomous.adapters.cta.CtaStatsAdapter`，在主循环里把每个策略的 `trading`/`pos`/`trades` 状态以及 `variables` 中的 `realized_pnl`、`equity` 包装成 `StrategySnapshot` 事件发出，健康监控据此做按策略盈亏的熔断，资金分配器据此估计波动率。策略只需在 `variables` 里维护 `realized_pnl` 与 `equity` 两个键即可接入。
+
+## 其他引擎
+
+没有 `strategies` 字典的引擎（如 PortfolioStrategy、自定义组合引擎），可自行向事件引擎发布 `StrategySnapshot`，运行器会同样消费（见上文示例代码）。
