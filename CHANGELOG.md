@@ -18,6 +18,7 @@
 12. 新增 `python -m vnpy.autonomous status` 运行状态子命令：读取状态文件输出 pid / 模式 / 状态 / 时段 / 运行时长 / 心跳年龄 / 重启次数 / 策略数 / 风控与熔断标记的摘要行，`--follow` 每秒刷新，状态文件缺失或不可读时返回 2 并给出启动提示
 13. 通知通道新增 webhook：`notification.webhook_url` 配置后，邮件/微信成功或两者都未配置时统一 POST `{source, mode, message}` JSON，超时 5 秒且失败只记日志不影响交易；父级守护进程在主引擎创建前即可推送重启与看门狗告警，附 5 个 stub 测试
 14. 修复 notify_on_session_end 配置存在但从未发送的问题：交易时段结束并停止策略后发送当日成交笔数、风控是否武装、当前状态的摘要，`notify_on_session_end=false` 时不发送，附 3 个 stub 测试
+15. 风控快照新增 breached 字段：区分「当前已武装（正在拦截开仓）」与「本时段曾触发熔断（disarm 后拦截解除但历史仍在）」，`reset_daily` 归零，运维看板与 webhook 消费者据此判断是否需要人工复盘
 10. 修复参考策略 realized_pnl / equity 未乘合约乘数的问题：这两个变量是货币金额，未乘数会让健康熔断与资金分配按放大了 size 倍的错误盈亏做决策，实盘下等子系统被误导
 
 ## 调整

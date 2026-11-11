@@ -298,3 +298,30 @@ def test_reset_daily_refreshes_baseline() -> None:
         assert guard.state.peak_equity == 199000
     finally:
         main_engine.close()
+
+def test_snapshot_includes_breached_flag() -> None:
+    """Distinguishing armed (currently blocking) from breached (fired today) matters."""
+    main_engine, _gateway = build_engine()
+    try:
+        seed_contract(main_engine)
+        guard = RiskGuard(
+            main_engine,
+            RiskLimits(daily_loss_limit=1000, kill_switch_on_breach=False),
+        )
+        guard.install()
+
+        assert guard.snapshot()["breached"] is False
+        guard.arm("测试触发")
+        assert guard.armed is True
+        assert guard.snapshot()["breached"] is True
+
+        guard.disarm()
+        assert guard.armed is False
+        # Disarm clears the block but the historical flag stays: an operator
+        # must still see that the breaker fired earlier in this session.
+        assert guard.snapshot()["breached"] is True
+
+        guard.reset_daily()
+        assert guard.snapshot()["breached"] is False
+    finally:
+        main_engine.close()

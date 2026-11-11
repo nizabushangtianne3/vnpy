@@ -328,6 +328,7 @@ class RiskGuard:
         with self._lock:
             state: dict[str, object] = {
                 "armed": self.state.armed,
+                "breached": self.state.breached,
                 "armed_reason": self.state.armed_reason,
                 "day_start_balance": self.state.day_start_balance,
                 "current_balance": self.state.current_balance,
