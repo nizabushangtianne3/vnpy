@@ -70,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     optimize_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
     optimize_parser.add_argument("--bars", type=int, default=300, help="合成K线数量")
     optimize_parser.add_argument("--seed", type=int, default=7, help="随机种子")
+    optimize_parser.add_argument("--train-bars", type=int, default=0, help="walk-forward 训练段长度，设置后启用样本外验证")
+    optimize_parser.add_argument("--test-bars", type=int, default=0, help="walk-forward 测试段长度，设置后启用样本外验证")
     backtest_parser: argparse.ArgumentParser = subparsers.add_parser(
         "backtest", help="离线回测一个策略并输出绩效"
     )
@@ -393,19 +395,27 @@ def command_optimize(args: argparse.Namespace) -> int:
         print("错误：" + str(exc))
         return 2
 
-    print(f"参数组合数：{len(grid)}")
+    walk_forward: bool = args.train_bars > 0 and args.test_bars > 0
+    if (args.train_bars > 0) != (args.test_bars > 0):
+        print("错误：--train-bars 与 --test-bars 必须同时设置")
+        return 2
+    if walk_forward and args.train_bars < 30:
+        print("错误：--train-bars 至少 30 根才能完成策略预热")
+        return 2
+    if walk_forward and args.test_bars < 10:
+        print("错误：--test-bars 至少 10 根才有统计意义")
+        return 2
 
-    rows: list[dict] = []
-    for settings_item in grid:
+    def _run_one(config: dict[str, int | float], bars_slice: list) -> dict:
         strategy = strategy_class(
             cta_engine=None,
             strategy_name="optimize",
             vt_symbol=args.vt_symbol,
-            setting=dict(settings_item),
+            setting=dict(config),
         )
         result = run_backtest(
             strategy,
-            bars,
+            bars_slice,
             BacktestSettings(
                 slippage=args.slippage,
                 rate=args.rate,
@@ -413,26 +423,101 @@ def command_optimize(args: argparse.Namespace) -> int:
                 capital=args.capital,
             ),
         )
-        rows.append(
-            {
-                "params": dict(settings_item),
-                "total_pnl": result.total_pnl,
-                "sharpe": result.sharpe,
-                "max_drawdown": result.max_drawdown,
-                "trade_count": result.trade_count,
-                "win_rate": result.win_rate,
-            }
-        )
+        return {
+            "params": dict(config),
+            "total_pnl": result.total_pnl,
+            "sharpe": result.sharpe,
+            "max_drawdown": result.max_drawdown,
+            "trade_count": result.trade_count,
+            "win_rate": result.win_rate,
+        }
 
-    rows.sort(key=lambda item: item["sharpe"], reverse=True)
-    print(f"{'排名':>4} {'sharpe':>8} {'total_pnl':>12} {'max_dd':>10} {'trades':>8} {'win_rate':>9}  params")
-    for rank, row in enumerate(rows[: max(args.top, 1)], start=1):
-        params_text = ",".join(f"{k}={v}" for k, v in row["params"].items())
-        print(
-            f"{rank:>4} {row['sharpe']:>8.3f} {row['total_pnl']:>12.2f}"
-            f" {row['max_drawdown']:>10.2f} {row['trade_count']:>8}"
-            f" {row['win_rate']:>9.3f}  {params_text}"
+    print(f"参数组合数：{len(grid)}")
+    rows: list[dict] = []
+    if not walk_forward:
+        for config in grid:
+            rows.append(_run_one(config, bars))
+        rows.sort(key=lambda item: item["sharpe"], reverse=True)
+        header = (
+            f"{'排名':>4} {'sharpe':>8} {'total_pnl':>12} {'max_dd':>10}"
+            f" {'trades':>8} {'win_rate':>9}  params"
         )
+        print(header)
+        for rank, row in enumerate(rows[: max(args.top, 1)], start=1):
+            params_text = ",".join(f"{k}={v}" for k, v in row["params"].items())
+            print(
+                f"{rank:>4} {row['sharpe']:>8.3f} {row['total_pnl']:>12.2f}"
+                f" {row['max_drawdown']:>10.2f} {row['trade_count']:>8}"
+                f" {row['win_rate']:>9.3f}  {params_text}"
+            )
+        best = rows[0] if rows else None
+    else:
+        print(
+            f"walk-forward 验证：训练 {args.train_bars} 根，"
+            f"测试 {args.test_bars} 根，总共 {len(bars)} 根K线"
+        )
+        window_start: int = 0
+        fold_results: list[dict] = []
+        while window_start + args.train_bars + args.test_bars <= len(bars):
+            train_bars_slice = bars[window_start : window_start + args.train_bars]
+            test_bars_slice = bars[
+                window_start + args.train_bars : window_start
+                + args.train_bars
+                + args.test_bars
+            ]
+            train_rows: list[dict] = []
+            for config in grid:
+                train_rows.append(_run_one(config, train_bars_slice))
+            train_rows.sort(key=lambda item: item["sharpe"], reverse=True)
+            best_config: dict = train_rows[0]["params"]
+            out_of_sample: dict = _run_one(best_config, test_bars_slice)
+            fold_results.append(
+                {
+                    "fold": len(fold_results) + 1,
+                    "train_start": window_start,
+                    "best_params": best_config,
+                    "train_sharpe": train_rows[0]["sharpe"],
+                    "train_pnl": train_rows[0]["total_pnl"],
+                    "test_sharpe": out_of_sample["sharpe"],
+                    "test_pnl": out_of_sample["total_pnl"],
+                }
+            )
+            window_start += args.test_bars
+
+        print(
+            f"{'fold':>5} {'train_sharpe':>13} {'train_pnl':>12}"
+            f" {'test_sharpe':>12} {'test_pnl':>12}  params"
+        )
+        for row in fold_results:
+            params_text = ",".join(f"{k}={v}" for k, v in row["best_params"].items())
+            print(
+                f"{row['fold']:>5} {row['train_sharpe']:>13.3f}"
+                f" {row['train_pnl']:>12.2f} {row['test_sharpe']:>12.3f}"
+                f" {row['test_pnl']:>12.2f}  {params_text}"
+            )
+
+        aggregate_train: float = sum(r["train_pnl"] for r in fold_results)
+        aggregate_test: float = sum(r["test_pnl"] for r in fold_results)
+        aggregate_train_sharpe: float = (
+            sum(r["train_sharpe"] for r in fold_results) / len(fold_results)
+        )
+        aggregate_test_sharpe: float = (
+            sum(r["test_sharpe"] for r in fold_results) /len(fold_results)
+        )
+        print(
+            f"\n样本内合计 pnl={aggregate_train:.2f}, avg_sharpe={aggregate_train_sharpe:.3f}"
+        )
+        print(
+            f"样本外合计 pnl={aggregate_test:.2f}, avg_sharpe={aggregate_test_sharpe:.3f}"
+        )
+        if aggregate_test <= 0:
+            print("结论：样本外未取得正期望，参数不稳定或策略无边际。")
+            return 1
+        if aggregate_test_sharpe < aggregate_train_sharpe * 0.5:
+            print("结论：样本外表现显著劣于样本内，存在过拟合风险，不建议启用。")
+            return 1
+        print("结论：样本外表现与样本内一致，参数相对稳定。")
+        return 0
 
     if not rows:
         print("错误：没有可用的回测结果")
@@ -442,6 +527,7 @@ def command_optimize(args: argparse.Namespace) -> int:
         print("结论：最优参数组合仍未取得正期望。")
         return 1
     return 0
+
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -77,3 +77,73 @@ def test_optimize_cli_runs_and_prints_ranking() -> None:
     # no edge on the synthetic series; the test only checks that the ranking
     # ran and reported something meaningful.
     assert result.returncode in (0, 1)
+
+def test_optimize_walk_forward_runs_and_reports_overfit() -> None:
+    """Walk-forward on a synthetic series: report folds and honest verdicts."""
+    import os
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-m",
+            "vnpy.autonomous",
+            "optimize",
+            "--grid",
+            "fast_window=5,10;slow_window=20,40",
+            "--bars",
+            "400",
+            "--train-bars",
+            "150",
+            "--test-bars",
+            "50",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+        timeout=180,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    combined: str = result.stdout + result.stderr
+    assert "walk-forward 验证：训练 150 根" in combined, combined
+    assert "样本内合计 pnl=" in combined
+    assert "样本外合计 pnl=" in combined
+    assert "结论：" in combined
+    # The verdict here is data dependent, but the CLI must exit with 0 or 1.
+    assert result.returncode in (0, 1)
+
+
+def test_optimize_rejects_mismatched_walk_forward_lengths() -> None:
+    import os
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-m",
+            "vnpy.autonomous",
+            "optimize",
+            "--grid",
+            "fast_window=5",
+            "--bars",
+            "120",
+            "--train-bars",
+            "100",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+        timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    combined: str = result.stdout + result.stderr
+    assert "--train-bars 与 --test-bars 必须同时设置" in combined
+    assert result.returncode == 2

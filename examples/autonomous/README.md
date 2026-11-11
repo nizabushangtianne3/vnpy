@@ -147,6 +147,15 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40
 
 输出按夏普排序的参数表，包含每组的 `total_pnl`、`max_drawdown`、`trade_count`、`win_rate`。所有组合 `total_pnl <= 0` 时返回 1，可直接当流水线门槛。
 
+样本内选参容易过拟合。加 `--train-bars` 与 `--test-bars` 触发 walk-forward 验证：每个折叠用训练段选最优参数，再在紧随其后的样本外段检验，最后给出「样本外表现是否与样本内一致」的结论：
+
+```bash
+python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
+    --csv path/to/rb2410_1min.csv --train-bars 2000 --test-bars 500
+```
+
+样本外 `total_pnl <= 0` 或样本外夏普不到样本内一半时返回 1，判定为过拟合。
+
 它驱动真实的 `CtaTemplate` 策略跑完一段 K 线，输出成交笔数、胜率、已实现/浮动盈亏、权益、最大回撤与夏普：
 
 ```
