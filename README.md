@@ -87,6 +87,7 @@ vnpy.alpha模块的设计理念受到[Qlib](https://github.com/microsoft/qlib)�
 * :heartbeat: **[健康熔断](./vnpy/autonomous/health.py)**：策略级连续亏损、当日亏损、错误率监控，自动暂停与冷却恢复
 * :balance_scale: **[资金分配](./vnpy/autonomous/portfolio.py)**：等权与逆波动率配置，权重上限水填算法
 * :satellite: **[运行编排](./vnpy/autonomous/runner.py)**：父级守护进程 + 交易子进程，崩溃重启、网关看门狗、状态文件与邮件/微信通知
+* :gear: **单一配置管理组合**：`app_settings.strategies` 声明式装配策略，时段开始自动 init/start，模块加载失败不中断进程
 
 ```bash
 python -m vnpy.autonomous check   # 校验配置与日历

@@ -36,9 +36,32 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 以「接口名称 -> 设置字典」组织，字典原样传给 `vnpy_xxx` 网关（键名沿用各网关文档，如 CTP 的「用户名」「密码」）。内置名称：`CTP`、`CTP Mini`、`CTP证券`、`易盛`、`XTP`、`TORA`、`TTS`、`FEMAS`、`顶点HTS`、`顶点飞创`、`IB`；未覆盖的接口可直接写 `"module:Class"` 导入路径，例如 `"my_gateway.pack:MyGateway"`。
 
-### `apps`
+### `apps` 与 `app_settings`
 
-需要加载的功能模块列表，支持内置名称（`CtaStrategy`、`PortfolioStrategy`、`RiskManager`、`PaperAccount`、`SpreadTrading`、`OptionMaster`、`AlgoTrading`、`ScriptTrader`、`ChartWizard`、`DataManager`、`DataRecorder`）或 `"module:Class"` 导入路径。含有 `init_engine`/`init_all_strategies`/`start_all_strategies` 方法的引擎会被纳入时段启停管理。
+`apps` 是需要加载的功能模块列表，支持内置名称（`CtaStrategy`、`PortfolioStrategy`、`RiskManager`、`PaperAccount`、`SpreadTrading`、`OptionMaster`、`AlgoTrading`、`ScriptTrader`、`ChartWizard`、`DataManager`、`DataRecorder`）或 `"module:Class"` 导入路径。含有 `init_engine`/`init_all_strategies`/`start_all_strategies` 方法的引擎会被纳入时段启停管理。
+
+`app_settings` 按应用名配置该模块的参数。对暴露 `init_strategy(name, vt_symbol, setting)` 的引擎（vnpy_ctastrategy 的 CtaEngine 即是），时段开始时运行器会自动装配其中列出的策略，整个组合只需这一份配置：
+
+```json
+"app_settings": {
+  "CtaStrategy": {
+    "strategies": [
+      {
+        "name": "my_trend_strategy",
+        "vt_symbol": "rb2410.SHFE",
+        "setting": {
+          "class_name": "MyCtaTemplate",
+          "symbol": "rb2410",
+          "exchange": "SHFE",
+          "fixed_size": 1
+        }
+      }
+    ]
+  }
+}
+```
+
+装配在 `init_engine()` 之后、`init_all_strategies()` 之前执行；条目缺 `name`/`vt_symbol` 会被跳过并记日志，不影响其余条目。引擎没有 `init_strategy` 方法时该项被忽略并给出警告。
 
 ### `calendar`
 

@@ -477,9 +477,15 @@ class AutonomousRunner:
                 if self.config.notification.notify_on_error:
                     self._notify(str(exc))
                 continue
-            engine: Any = main_engine.add_app(app_class)
+            try:
+                engine = main_engine.add_app(app_class)
+            except Exception as exc:   # noqa: BLE001
+                logger.warning("[autonomous] 应用模块 %s 加载失败：%s", app_name, exc)
+                if self.config.notification.notify_on_error:
+                    self._notify(f"应用模块 {app_name} 加载失败：{exc}")
+                continue
             if hasattr(engine, "init_engine") or hasattr(engine, "init_all_strategies"):
-                self._strategy_engines.append(engine)
+                self._strategy_engines.append((app_name, engine))
             strategies_attr: Any = getattr(engine, "strategies", None)
             if isinstance(strategies_attr, dict):
                 from .adapters.cta import CtaStatsAdapter
@@ -500,26 +506,73 @@ class AutonomousRunner:
         logger.warning("[autonomous] 等待合约超时，策略初始化可能不完整")
 
     def _start_strategy_engines(self) -> None:
-        """Initialize and start every strategy engine."""
+        """Provision, initialize and start every strategy engine."""
         runtime: Any = self.config.runtime
         engine: Any
-        for engine in self._strategy_engines:
+        app_name: str
+        for app_name, engine in self._strategy_engines:
             if hasattr(engine, "init_engine"):
                 engine.init_engine()
+            self._provision_strategies(app_name, engine)
             if hasattr(engine, "init_all_strategies"):
                 engine.init_all_strategies()
 
         if self._strategy_engines and runtime.strategy_init_wait_secs > 0:
             time.sleep(runtime.strategy_init_wait_secs)
 
-        for engine in self._strategy_engines:
+        for _app_name, engine in self._strategy_engines:
             if hasattr(engine, "start_all_strategies"):
                 engine.start_all_strategies()
+
+    def _provision_strategies(self, app_name: str, engine: Any) -> None:
+        """Auto-create strategies listed in app_settings through the engine API.
+
+        Engines exposing an ``init_strategy(name, vt_symbol, setting)`` method
+        (vnpy_ctastrategy CtaEngine does) receive one call per configured
+        strategy, so the whole portfolio is declared in a single config file.
+        """
+        settings: dict[str, object] = self.config.app_settings.get(app_name, {})
+        specs: object = settings.get("strategies")
+        if not isinstance(specs, list):
+            return
+
+        init_strategy: Any = getattr(engine, "init_strategy", None)
+        if not callable(init_strategy):
+            logger.warning(
+                "[autonomous] %s 引擎不支持自动装配策略，app_settings.strategies 已忽略",
+                app_name,
+            )
+            return
+
+        spec: object
+        for spec in specs:
+            if not isinstance(spec, dict):
+                logger.warning("[autonomous] 策略配置条目不是字典：%r", spec)
+                continue
+
+            name_obj: object = spec.get("name")
+            symbol_obj: object = spec.get("vt_symbol")
+            if not isinstance(name_obj, str) or not isinstance(symbol_obj, str):
+                logger.warning("[autonomous] 策略配置缺少 name 或 vt_symbol：%r", spec)
+                continue
+
+            setting: dict[str, object] = {}
+            setting_obj: object = spec.get("setting")
+            if isinstance(setting_obj, dict):
+                setting = {str(key): value for key, value in setting_obj.items()}
+
+            try:
+                init_strategy(name_obj, symbol_obj, setting)
+                logger.info(
+                    "[autonomous] 自动装配策略 %s -> %s", name_obj, symbol_obj
+                )
+            except Exception as exc:   # noqa: BLE001
+                logger.warning("[autonomous] 装配策略 %s 失败：%s", name_obj, exc)
 
     def _stop_strategy_engines(self) -> None:
         """Stop every strategy engine."""
         engine: Any
-        for engine in self._strategy_engines:
+        for _app_name, engine in self._strategy_engines:
             if hasattr(engine, "stop_all_strategies"):
                 engine.stop_all_strategies()
 
@@ -557,7 +610,7 @@ class AutonomousRunner:
     def _invoke_strategy_method(self, strategy_name: str, method_name: str) -> None:
         """Call a per-strategy method on engines that provide it."""
         engine: Any
-        for engine in self._strategy_engines:
+        for _app_name, engine in self._strategy_engines:
             method: Any = getattr(engine, method_name, None)
             if callable(method):
                 try:

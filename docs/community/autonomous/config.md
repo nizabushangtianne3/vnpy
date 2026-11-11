@@ -7,6 +7,7 @@
 | `mode` | `paper` / `live`，仅作标识与通知用途 |
 | `gateways` | 接口名 -> 设置字典（键名沿用各网关文档） |
 | `apps` | 功能模块列表，支持内置名或 `module:Class` 导入路径 |
+| `app_settings` | 按应用名传参；含 `strategies` 列表时由运行器在 `init_engine` 后自动装配策略（见 [runner](./runner.md)） |
 | `calendar` | 时段模板、夜盘结束时间、节假日文件、自定义时段 |
 | `risk` | 事前风控上限与熔断开关（见 [risk](./risk.md)） |
 | `health` | 策略健康熔断规则（见 [health](./health.md)） |
