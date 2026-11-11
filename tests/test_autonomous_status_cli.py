@@ -50,7 +50,7 @@ def make_state_file(tmp_path: Path, age_seconds: int = 30) -> Path:
         "next_open": "2026-11-12T13:30:00",
         "restarts_in_session": 0,
         "guard": {"armed": False},
-        "health": {"halted": False},
+        "health": {"trend": {"halted": False}},
         "portfolio": {},
         "ledger": {},
         "strategy_engines": 1,
@@ -74,7 +74,7 @@ def test_format_state_line_reports_fresh_heartbeat() -> None:
     payload: dict = _json.loads(
         '{"pid": 1, "mode": "paper", "status": "supervising", "session": "day",'
         ' "uptime_secs": 12.5, "restarts_in_session": 0, "strategy_engines": 2,'
-        ' "guard": {"armed": false}, "health": {"halted": false},'
+        ' "guard": {"armed": false}, "health": {"trend": {"halted": false}},'
         f' "updated_at": "{datetime.now().isoformat()}"}}'
     )
     line: str = _format_state_line(payload)
@@ -95,7 +95,7 @@ def test_format_state_line_survives_bad_timestamp() -> None:
         "restarts_in_session": 0,
         "strategy_engines": 0,
         "guard": {"armed": True},
-        "health": {"halted": True},
+        "health": {"trend": {"halted": True}},
         "updated_at": "not-a-timestamp",
     }
     line: str = _format_state_line(payload)

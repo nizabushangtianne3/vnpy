@@ -560,13 +560,19 @@ def _format_state_line(payload: dict) -> str:
     age_text: str = f"{age:.0f}s" if age >= 0 else "unknown"
     guard: dict = payload.get("guard") or {}
     health: dict = payload.get("health") or {}
+    # health is {strategy_name: {halted: bool, ...}}; the operator wants to
+    # know whether any strategy is currently halted, not the per-strategy
+    # breakdown (use the full state file for that).
+    any_halted: bool = any(
+        bool(h.get("halted")) for h in health.values() if isinstance(h, dict)
+    )
     return (
         f"pid={payload.get('pid')} mode={payload.get('mode')} "
         f"status={payload.get('status')} session={payload.get('session')} "
         f"uptime={payload.get('uptime_secs')}s heartbeat_age={age_text} "
         f"restarts={payload.get('restarts_in_session')} "
         f"strategies={payload.get('strategy_engines')} "
-        f"guard_armed={guard.get('armed')} health_halted={health.get('halted')}"
+        f"guard_armed={guard.get('armed')} health_halted={any_halted}"
         f" guard_breached={guard.get('breached', False)}"
     )
 
