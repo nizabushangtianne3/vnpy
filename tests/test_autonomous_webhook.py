@@ -84,3 +84,29 @@ def test_notify_falls_back_to_webhook_without_engines() -> None:
     with patch.object(instance, "_send_webhook") as mock_webhook:
         instance._notify("重启冷却结束")
     mock_webhook.assert_called_once_with("重启冷却结束")
+
+
+def test_notify_skips_email_when_credentials_missing() -> None:
+    """A default SMTP host without credentials must not queue doomed sends."""
+    from vnpy.trader.setting import SETTINGS
+
+    config: AutonomousConfig = AutonomousConfig(
+        mode="paper",
+        gateways={"CTP": {}},
+        notification=NotificationConfig(webhook_url="http://webhook.test/hook"),
+    )
+    instance: AutonomousRunner = AutonomousRunner(config)
+    instance.main_engine = MagicMock()
+    instance.main_engine.get_engine.return_value = None
+
+    saved = {key: SETTINGS.get(key) for key in ("email.server", "email.username", "email.receiver")}
+    SETTINGS["email.server"] = "smtp.test"
+    SETTINGS["email.username"] = ""
+    SETTINGS["email.receiver"] = ""
+    try:
+        with patch.object(instance, "_send_webhook") as mock_webhook:
+            instance._notify("心跳")
+        instance.main_engine.send_notification.assert_not_called()
+        mock_webhook.assert_called_once_with("心跳")
+    finally:
+        SETTINGS.update(saved)

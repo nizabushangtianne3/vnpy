@@ -27,6 +27,7 @@
 21. 修正风控熔断平仓的 OffsetConverter 接入路径：convert_order_request 位于 OmsEngine 而非 MainEngine，平仓流程现在正确调用 OmsEngine.convert_order_request 完成 SHFE/INE 平今/平昨拆分，并在拆分后对每笔请求执行风控校验，确保 allow_reduce_when_armed=False 时平仓单不会被熔断自身拦截
 22. 修复 status 子命令 health_halted 永远显示 None 的问题：状态文件里的 health 是 {策略名: {halted: bool}} 结构，原代码用 health.get('halted') 只能取到 None；现在改为聚合任一策略的 halted 状态，测试 payload 同步改为真实结构
 23. 修复 optimize walk-forward 在 K 线不足以组成单个折叠时除零崩溃的问题：现在提前校验 `len(bars) >= train_bars + test_bars`，不足时返回明确的错误提示与退出码 2，不再抛出 ZeroDivisionError
+24. 修复通知通道把「有 SMTP 服务器地址」误判为「邮件可发送」的问题：默认 SETTINGS 的 `email.server` 非空但 `email.username` / `email.receiver` 为空，每次通知都会排队一次注定失败的 SMTP 连接；现在要求 server、username、receiver 三项齐备才走邮件，否则回退微信 / webhook，附回归测试
 
 ## 调整
 

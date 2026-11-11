@@ -1009,8 +1009,17 @@ class AutonomousRunner:
         main_engine: MainEngine | None = self.main_engine
         if main_engine is not None:
             try:
-                email_server: object = SETTINGS.get("email.server")
-                if email_server:
+                # A non-empty server alone does not mean email can deliver:
+                # the stock settings ship with a default SMTP host but blank
+                # credentials, so every send would just queue another
+                # guaranteed-to-fail SMTP attempt. Require username and
+                # receiver before using the email channel.
+                email_ready: bool = bool(
+                    SETTINGS.get("email.server")
+                    and SETTINGS.get("email.username")
+                    and SETTINGS.get("email.receiver")
+                )
+                if email_ready:
                     main_engine.send_notification(
                         message, subject="VeighNa Autonomous Trading"
                     )

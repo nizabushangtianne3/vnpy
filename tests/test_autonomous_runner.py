@@ -196,8 +196,12 @@ def test_notify_without_email_uses_wechat_only(tmp_path) -> None:
     )
 
     saved_server: object = SETTINGS.get("email.server")
+    saved_username: object = SETTINGS.get("email.username")
+    saved_receiver: object = SETTINGS.get("email.receiver")
     try:
         SETTINGS["email.server"] = ""
+        SETTINGS["email.username"] = "user@example.com"
+        SETTINGS["email.receiver"] = "user@example.com"
         runner._notify("测试消息")
         assert sent == []
         assert wechat_messages == ["VeighNa Autonomous Trading\n测试消息"]
@@ -207,6 +211,8 @@ def test_notify_without_email_uses_wechat_only(tmp_path) -> None:
         assert sent == ["第二条"]
     finally:
         SETTINGS["email.server"] = saved_server
+        SETTINGS["email.username"] = saved_username
+        SETTINGS["email.receiver"] = saved_receiver
 
 
 def test_session_start_resets_guard_daily_baseline(tmp_path) -> None:
