@@ -229,7 +229,8 @@ def test_trend_strategy_full_cycle_with_real_engine() -> None:
         wait_until(lambda: strategy.realized_pnl < 0)
 
         assert strategy.pos == 0
-        assert strategy.realized_pnl == (80 - 110) * 2
+        # pnl is money: price move x volume x contract multiplier (size=10 here)
+        assert strategy.realized_pnl == (80 - 110) * 2 * 10
         assert strategy.avg_cost == 0
 
         engine.stop_all_strategies()

@@ -119,6 +119,37 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 `.vntrader/autonomous_state.json` 原子更新，内容包括：进程角色、模式、当前时段、距下次开盘时间、风控快照、各策略健康度、资金分配、成交台账、各网关最近事件时间。外部值守脚本（如看门狗、大屏）可直接读取。
 
+## 回测验收：先证明策略能赚钱再上实盘
+
+自主交易最容易犯的错误，是拿一个从没被验证过盈亏的策略直接开机自启。`backtest` 子命令就是第一道关卡：
+
+```bash
+python -m vnpy.autonomous backtest --bars 300 --seed 7
+```
+
+它驱动真实的 `CtaTemplate` 策略跑完一段 K 线，输出成交笔数、胜率、已实现/浮动盈亏、权益、最大回撤与夏普：
+
+```
+回测结果（合成行情，真实决策前请替换为真实K线）：
+  bars             300
+  trade_count      11
+  winning_trades   1
+  open_position    1.0
+  closed_pnl       9416.69
+  unrealized_pnl   567.48
+  total_pnl        9984.18
+  equity           1009984.18
+  win_rate         0.09
+  max_drawdown     144.78
+  sharpe           0.85
+```
+
+`total_pnl <= 0` 时命令返回 1，可以直接挂到流水线里当门槛。
+
+**关于成交模型**：它复刻 `vnpy_ctastrategy` 官方回测器的规则——第 N 根 K 线挂出的限价单，只有第 N+1 根 K线真的穿过这个价位才成交，成交价取该根的开盘价。没有这个一bar延迟，任何趋势策略在事后看起来都是赚钱的。滑点方向永远不利于交易者，手续费按每次成交计收。
+
+**当前参考策略的实测结论**：`AutonomousTrendStrategy` 在合成行情上会频繁反手，11 笔成交只 1 笔盈利，靠的是持仓浮盈把总数拉正。它在盘整市里靠高换手赚不到钱，这说明必须用你自己的真实历史数据重跑 `backtest`，再决定是否启用——合成序列只能验证链路正确，不能证明经济含义。
+
 ## 开机自启（Windows 计划任务）
 
 无人值守需要进程不依赖人工登录。[install_service.ps1](install_service.ps1) 把守护进程注册成 Windows 计划任务：

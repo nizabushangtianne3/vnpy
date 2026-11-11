@@ -193,17 +193,37 @@ class AutonomousTrendStrategy(CtaTemplate):
                 ) / total_abs
             return
 
-        # Reducing trades realize pnl at the tracked cost basis.
+        # Reducing trades realize pnl at the tracked cost basis, converted to
+        # money with the contract multiplier.
+        size: int = self._contract_size()
         if trade.direction == Direction.SHORT:
-            self.realized_pnl += (price - self.avg_cost) * volume
+            self.realized_pnl += (price - self.avg_cost) * volume * size
         else:
-            self.realized_pnl += (self.avg_cost - price) * volume
+            self.realized_pnl += (self.avg_cost - price) * volume * size
 
         if pos_after == 0:
             self.avg_cost = 0.0
 
     def _mark_to_market(self) -> float:
-        """Realized pnl plus unrealized pnl at the last known price."""
+        """Realized pnl plus unrealized pnl at the last known price.
+
+        Both are money, not ticks: the contract multiplier turns a price move
+        into cash. Health rules and the capital allocator read ``equity`` as a
+        balance, so an unscaled value would size positions off a number that is
+        off by the size factor.
+        """
         if self.pos == 0 or self.avg_cost == 0:
             return self.realized_pnl
-        return self.realized_pnl + (self.last_price - self.avg_cost) * self.pos
+
+        size: int = self._contract_size()
+        return self.realized_pnl + (
+            self.last_price - self.avg_cost
+        ) * self.pos * size
+
+    def _contract_size(self) -> int:
+        """Contract multiplier, 1 when the engine cannot provide it."""
+        try:
+            size: int = int(self.get_size())
+        except Exception:
+            size = 1
+        return size or 1

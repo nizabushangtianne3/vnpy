@@ -10,6 +10,8 @@
 6. 新增原子状态文件写入（带重试）与 Windows 并发读安全，父进程 terminate 后等待子进程真正退出，交易子进程退出时关闭数据库句柄，避免测试与计划任务场景下残留句柄导致文件占用
 7. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
 8. 新增 examples/autonomous/install_service.ps1：把自主交易守护进程注册为 Windows 计划任务，登录与开机自动启动、隐藏窗口、进程退出后按一分钟间隔自动重启、无执行时限；注册前校验配置文件存在并做解释器预检，非管理员权限下明确报错而不是假报成功，提供 install / uninstall / status 三个子命令，附只读回归测试
+9. 新增 vnpy.autonomous.backtest 离线策略验收模块与 `python -m vnpy.autonomous backtest` 子命令：驱动真实 CtaTemplate 策略跑完一段 K 线并输出成交笔数、胜率、已实现与浮动盈亏、权益、最大回撤、夏普；total_pnl <= 0 时命令返回 1 可直接作为流水线门槛。成交模型复刻 vnpy_ctastrategy 官方回测器：第 N 根 K 线挂出的限价单仅当第 N+1 根 K 线穿过该价位才成交，成交价取该根开盘价，滑点方向始终不利于交易者，手续费按次计收。vnpy_ctastrategy 改为惰性导入，缺失时整个 autonomous 包仍可用
+10. 修复参考策略 realized_pnl / equity 未乘合约乘数的问题：这两个变量是货币金额，未乘数会让健康熔断与资金分配按放大了 size 倍的错误盈亏做决策，实盘下等子系统被误导
 
 ## 调整
 

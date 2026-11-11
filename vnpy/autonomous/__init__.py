@@ -25,6 +25,13 @@ from .config import (
     validate_config,
 )
 from .event import EVENT_STRATEGY_SNAPSHOT, StrategySnapshot
+try:
+    from .backtest import BacktestResult, BacktestSettings, run_backtest
+
+    _HAS_BACKTEST: bool = True
+except ImportError:  # pragma: no cover - vnpy_ctastrategy is optional
+    _HAS_BACKTEST = False
+
 from .adapters.cta import CtaStatsAdapter
 from .health import HealthMonitor, StrategyHealth
 from .portfolio import CapitalAllocator
@@ -42,6 +49,9 @@ from .runner import (
 
 
 __all__ = [
+    "BacktestResult",
+    "BacktestSettings",
+    "run_backtest",
     "APP_REGISTRY",
     "AllocationConfig",
     "AutonomousConfig",
