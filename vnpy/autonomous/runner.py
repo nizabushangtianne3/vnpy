@@ -452,6 +452,7 @@ class AutonomousRunner:
         )
         self.guard.install()
         self.guard.register_events(self.event_engine)
+        restore_risk_state(self.guard, self.state_path)
 
         self.health.set_pause_callback(self._pause_strategy)
         self.health.set_resume_callback(self._resume_strategy)
@@ -1120,3 +1121,17 @@ def read_state(path: str | Path) -> dict[str, object]:
     if isinstance(payload, dict):
         return {str(k): v for k, v in payload.items()}
     return {}
+
+
+def restore_risk_state(guard: RiskGuard, state_path: Path) -> None:
+    """Re-apply today's persisted risk counters after a child restart.
+
+    The state file is the authoritative record of the previous child's
+    circuit breaker. Without this restore, a crash restart would reset the
+    daily loss baseline and could re-open positions after a breach.
+    """
+    payload: dict[str, object] = read_state(state_path)
+    guard_data: object = payload.get("guard")
+    if not isinstance(guard_data, dict):
+        return
+    guard.restore(guard_data)

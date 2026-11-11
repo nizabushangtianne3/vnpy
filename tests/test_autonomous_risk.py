@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 
 from vnpy.autonomous.config import RiskLimits
 from vnpy.autonomous.risk import RiskGuard
@@ -331,5 +332,63 @@ def test_snapshot_includes_breached_flag() -> None:
 
         guard.reset_daily()
         assert guard.snapshot()["breached"] is False
+    finally:
+        main_engine.close()
+
+
+def test_restore_recovers_today_state() -> None:
+    """A restart within the same trading day must not reset the breaker."""
+    main_engine, _ = build_engine()
+    try:
+        guard = RiskGuard(main_engine, RiskLimits(daily_loss_limit=1000))
+        clock_now = datetime(2026, 10, 9, 14, 0)
+        guard._clock = lambda: clock_now  # type: ignore[method-assign]
+
+        guard.restore(
+            {
+                "session_day": "2026-10-09",
+                "armed": True,
+                "armed_reason": "当日亏损达到上限",
+                "breached": True,
+                "day_start_balance": 100000.0,
+                "peak_equity": 101000.0,
+                "current_balance": 98500.0,
+            }
+        )
+
+        assert guard.armed is True
+        snapshot = guard.snapshot()
+        assert snapshot["breached"] is True
+        assert snapshot["day_start_balance"] == 100000.0
+        assert snapshot["peak_equity"] == 101000.0
+        assert snapshot["current_balance"] == 98500.0
+    finally:
+        main_engine.close()
+
+
+def test_restore_ignores_stale_day() -> None:
+    """Yesterday's payload must not seed today's baseline or kill switch."""
+    main_engine, _ = build_engine()
+    try:
+        guard = RiskGuard(main_engine, RiskLimits())
+        clock_now = datetime(2026, 10, 10, 9, 0)
+        guard._clock = lambda: clock_now  # type: ignore[method-assign]
+
+        guard.restore(
+            {
+                "session_day": "2026-10-09",
+                "armed": True,
+                "breached": True,
+                "day_start_balance": 100000.0,
+                "peak_equity": 101000.0,
+                "current_balance": 98500.0,
+            }
+        )
+
+        assert guard.armed is False
+        snapshot = guard.snapshot()
+        assert snapshot["breached"] is False
+        assert snapshot["day_start_balance"] is None
+        assert snapshot["current_balance"] == 0.0
     finally:
         main_engine.close()

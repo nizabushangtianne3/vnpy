@@ -404,6 +404,37 @@ class RiskGuard:
             }
         return state
 
+    def restore(self, payload: dict[str, object]) -> None:
+        """Restore persisted risk counters, e.g. after a child restart.
+
+        Only accepted when the snapshot belongs to the same trading day:
+        a stale payload from yesterday must not seed today's baseline or
+        keep a stale kill switch armed.
+        """
+        session_day: str = str(payload.get("session_day", ""))
+        if not session_day:
+            return
+        if self._clock().date().isoformat() != session_day:
+            return
+
+        with self._lock:
+            armed = bool(payload.get("armed"))
+            day_start_balance = payload.get("day_start_balance")
+            peak_equity = payload.get("peak_equity")
+            current_balance = payload.get("current_balance")
+
+            self.state.armed = armed
+            self.state.armed_reason = (
+                str(payload.get("armed_reason", "")) if armed else ""
+            )
+            self.state.breached = bool(payload.get("breached"))
+            if isinstance(day_start_balance, (int, float)):
+                self.state.day_start_balance = float(day_start_balance)
+            if isinstance(peak_equity, (int, float)):
+                self.state.peak_equity = float(peak_equity)
+            if isinstance(current_balance, (int, float)):
+                self.state.current_balance = float(current_balance)
+
     # ------------------------------------------------------------- internal
 
     def _emit(self, message: str) -> None:
