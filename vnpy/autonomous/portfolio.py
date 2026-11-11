@@ -128,7 +128,8 @@ class CapitalAllocator:
         Uses iterative water-filling: names above the cap are pinned to the
         cap and the remaining mass is redistributed among the rest. When
         len(strategies) * max_weight < 1 the caps cannot hold the whole
-        mass, and the result falls back to clamp-then-renormalize.
+        mass, so the remainder stays in cash instead of being renormalized
+        back above the limit.
         """
         if not weights:
             return {}
@@ -143,10 +144,7 @@ class CapitalAllocator:
                 name: min(max(weight, min_weight), max_weight)
                 for name, weight in weights.items()
             }
-            bounded_total: float = sum(bounded.values())
-            if bounded_total <= 0:
-                return self._equal_weights(list(weights.keys()))
-            return {name: value / bounded_total for name, value in bounded.items()}
+            return bounded
 
         # Iterative water-filling against the per-strategy cap.
         fixed: dict[str, float] = {}
@@ -185,15 +183,6 @@ class CapitalAllocator:
         if fixed_total <= 0:
             return self._equal_weights(list(weights.keys()))
         return {name: value / fixed_total for name, value in fixed.items()}
-
-        total: float = sum(bounded.values())
-        if total <= 0:
-            return self._equal_weights(list(bounded.keys()))
-
-        normalized: dict[str, float] = {}
-        for name, weight in bounded.items():
-            normalized[name] = weight / total
-        return normalized
 
     def snapshot(self) -> dict[str, dict[str, object]]:
         """Return a JSON-serializable snapshot of tracked equity."""

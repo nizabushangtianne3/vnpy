@@ -94,3 +94,15 @@ def test_load_holidays(tmp_path) -> None:
 
     missing = load_holidays(tmp_path / "missing.json")
     assert missing == set()
+
+
+def test_load_holidays_invalid_payload_raises(tmp_path) -> None:
+    path = tmp_path / "holidays.json"
+    path.write_text(json.dumps(["2026-10-01", "not-a-date"]), encoding="utf-8")
+
+    try:
+        load_holidays(path)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid holiday date must raise ValueError")

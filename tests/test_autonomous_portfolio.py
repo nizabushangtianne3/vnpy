@@ -21,8 +21,9 @@ def test_equal_weight_respects_max_weight() -> None:
     )
 
     # 两个策略的等权本身就是 0.5，上限 0.3 无法同时满足两者，
-    # 走钳制+归一化分支后仍为 0.5，保留 10% 现金即每个 45000
-    assert set(result.values()) == {45000.0}
+    # 超出上限的部分保留为现金：可用 0.9 × 权重 0.6 = 0.54，
+    # 保留 10% 总现金后每策略 27000
+    assert result == {"a": 27000.0, "b": 27000.0}
 
 
 def test_apply_bounds_clamps_extreme_weights() -> None:

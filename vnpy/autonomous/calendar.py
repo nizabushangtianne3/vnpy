@@ -13,6 +13,8 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from collections.abc import Callable
 
+from vnpy.trader.logger import logger
+
 
 # Default day sessions for Chinese futures (SHFE/INE/DCE/CZCE).
 CN_FUTURES_DAY_SESSIONS: list[tuple[str, str, str]] = [
@@ -230,6 +232,10 @@ def load_holidays(path: str | Path) -> set[date]:
     """Load a set of holiday dates from a JSON list of \"YYYY-MM-DD\"."""
     file_path: Path = Path(path)
     if not file_path.exists():
+        logger.warning(
+            "[autonomous] 节假日文件不存在：%s（已按空清单处理，"
+            "请确认文件路径或按交易所休市安排维护）", file_path,
+        )
         return set()
 
     with open(file_path, encoding="utf-8") as file:
