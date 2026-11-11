@@ -487,6 +487,12 @@ class AutonomousRunner:
                         self.guard.flatten_positions()
                     self._stop_strategy_engines()
                     strategies_started = False
+                    if self.config.notification.notify_on_session_end:
+                        self._notify(
+                            f"交易时段结束：当日成交 {self.ledger.total()} 笔，"
+                            f"风控{'已武装' if self.guard is not None and self.guard.armed else '未触发'}，"
+                            f"状态 {self._status}"
+                        )
                 self._write_state("session_ended")
                 logger.info("[autonomous] 非交易时段，子进程退出，等待守护进程重启")
                 return
