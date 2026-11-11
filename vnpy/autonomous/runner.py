@@ -15,6 +15,7 @@ import importlib
 import json
 import multiprocessing
 import os
+import sys
 import time
 import threading
 from dataclasses import dataclass, field
@@ -154,6 +155,24 @@ def child_entry(config_path: str) -> None:
     runner.run_child()
 
 
+def ensure_utf8_output() -> None:
+    """Make stdout/stderr tolerate non-ASCII log and print output.
+
+    Traders often run the supervisor from a cmd.exe console with GBK, and CI
+    runners default to cp1252. Chinese log lines and print() calls from the
+    core engine would raise UnicodeEncodeError there and take the whole
+    process down, so switch the streams to UTF-8 when they are not already.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            encoding: str = str(getattr(stream, "encoding", "") or "")
+            if encoding.lower() not in ("utf-8", "utf8"):
+                stream.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[union-attr]
+        except Exception:   # noqa: BLE001
+            # pytest capture objects and exotic streams may not support it.
+            pass
+
+
 class AutonomousRunner:
     """Supervisor and child-process orchestrator for autonomous trading."""
 
@@ -262,6 +281,7 @@ class AutonomousRunner:
 
     def run_parent(self) -> None:
         """Run the supervisor loop (blocking)."""
+        ensure_utf8_output()
         config: AutonomousConfig = self.config
         runtime: Any = config.runtime
         poll: float = runtime.poll_interval_secs
@@ -369,6 +389,7 @@ class AutonomousRunner:
 
     def run_child(self) -> None:
         """Run the trading process (blocking)."""
+        ensure_utf8_output()
         self._status = "starting"
         self._write_state("starting")
 

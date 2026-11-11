@@ -35,6 +35,7 @@ from .runner import (
     AutonomousRunner,
     TradeLedger,
     child_entry,
+    ensure_utf8_output,
     read_state,
 )
 
@@ -63,6 +64,7 @@ __all__ = [
     "TradingCalendar",
     "build_profile",
     "child_entry",
+    "ensure_utf8_output",
     "load_config",
     "load_holidays",
     "read_state",

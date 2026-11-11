@@ -106,6 +106,9 @@ def command_sessions(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
+    from .runner import ensure_utf8_output
+
+    ensure_utf8_output()
     parser: argparse.ArgumentParser = build_parser()
     args: argparse.Namespace = parser.parse_args(argv)
 
