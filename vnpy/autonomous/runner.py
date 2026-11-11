@@ -29,6 +29,7 @@ from vnpy.trader.engine import MainEngine
 from vnpy.trader.event import EVENT_LOG, EVENT_ORDER, EVENT_TRADE
 from vnpy.trader.logger import logger
 from vnpy.trader.object import LogData, OrderData, TradeData
+from vnpy.trader.setting import SETTINGS
 
 from .calendar import Session, TradingCalendar, build_profile, load_holidays
 from .config import AutonomousConfig, load_config
@@ -529,10 +530,22 @@ class AutonomousRunner:
         app_name: str
         for app_name, engine in self._strategy_engines:
             if hasattr(engine, "init_engine"):
-                engine.init_engine()
+                try:
+                    engine.init_engine()
+                except Exception as exc:   # noqa: BLE001
+                    logger.warning(
+                        "[autonomous] 引擎 %s 初始化失败：%s", app_name, exc
+                    )
+                    if self.config.notification.notify_on_error:
+                        self._notify(f"引擎 {app_name} 初始化失败：{exc}")
             self._provision_strategies(app_name, engine)
             if hasattr(engine, "init_all_strategies"):
-                engine.init_all_strategies()
+                try:
+                    engine.init_all_strategies()
+                except Exception as exc:   # noqa: BLE001
+                    logger.warning(
+                        "[autonomous] 引擎 %s 策略初始化失败：%s", app_name, exc
+                    )
 
         if self._strategy_engines and runtime.strategy_init_wait_secs > 0:
             time.sleep(runtime.strategy_init_wait_secs)
@@ -544,47 +557,64 @@ class AutonomousRunner:
     def _provision_strategies(self, app_name: str, engine: Any) -> None:
         """Auto-create strategies listed in app_settings through the engine API.
 
-        Engines exposing an ``init_strategy(name, vt_symbol, setting)`` method
-        (vnpy_ctastrategy CtaEngine does) receive one call per configured
-        strategy, so the whole portfolio is declared in a single config file.
+        Engines exposing ``add_strategy(class_name, strategy_name, vt_symbol,
+        setting)`` receive one call per configured entry, so the whole
+        portfolio is declared in a single config file. Entries already known
+        to the engine are skipped, keeping restarts idempotent.
         """
         settings: dict[str, object] = self.config.app_settings.get(app_name, {})
         specs: object = settings.get("strategies")
         if not isinstance(specs, list):
             return
 
-        init_strategy: Any = getattr(engine, "init_strategy", None)
-        if not callable(init_strategy):
+        add_strategy: Any = getattr(engine, "add_strategy", None)
+        if not callable(add_strategy):
             logger.warning(
-                "[autonomous] %s 引擎不支持自动装配策略，app_settings.strategies 已忽略",
+                "[autonomous] %s 引擎没有 add_strategy 接口，app_settings.strategies 已忽略",
                 app_name,
             )
             return
 
+        existing: Any = getattr(engine, "strategies", None)
         spec: object
         for spec in specs:
             if not isinstance(spec, dict):
                 logger.warning("[autonomous] 策略配置条目不是字典：%r", spec)
                 continue
 
-            name_obj: object = spec.get("name")
+            class_obj: object = spec.get("class_name")
             symbol_obj: object = spec.get("vt_symbol")
-            if not isinstance(name_obj, str) or not isinstance(symbol_obj, str):
-                logger.warning("[autonomous] 策略配置缺少 name 或 vt_symbol：%r", spec)
+            if not isinstance(class_obj, str) or not isinstance(symbol_obj, str):
+                logger.warning(
+                    "[autonomous] 策略配置缺少 class_name 或 vt_symbol：%r", spec
+                )
                 continue
+
+            name_obj: object = spec.get("name")
+            if not isinstance(name_obj, str) or not name_obj:
+                name_obj = self._default_strategy_name(class_obj, symbol_obj)
 
             setting: dict[str, object] = {}
             setting_obj: object = spec.get("setting")
             if isinstance(setting_obj, dict):
                 setting = {str(key): value for key, value in setting_obj.items()}
 
+            if isinstance(existing, dict) and name_obj in existing:
+                continue
+
             try:
-                init_strategy(name_obj, symbol_obj, setting)
+                add_strategy(class_obj, name_obj, symbol_obj, setting)
                 logger.info(
                     "[autonomous] 自动装配策略 %s -> %s", name_obj, symbol_obj
                 )
             except Exception as exc:   # noqa: BLE001
                 logger.warning("[autonomous] 装配策略 %s 失败：%s", name_obj, exc)
+
+    @staticmethod
+    def _default_strategy_name(class_name: str, vt_symbol: str) -> str:
+        """Derive a strategy name from its class and vt_symbol."""
+        symbol: str = vt_symbol.split(".")[0]
+        return f"{class_name}_{symbol}"
 
     def _stop_strategy_engines(self) -> None:
         """Stop every strategy engine."""
@@ -643,21 +673,46 @@ class AutonomousRunner:
     def _process_trade_event(self, event: Event) -> None:
         """Record trades by strategy reference into the ledger."""
         trade: TradeData = event.data
-        main_engine: MainEngine = self._require_engine()
         strategy_name: str = "unknown"
-        order: OrderData | None = main_engine.get_order(trade.orderid)
-        if order is not None and order.reference:
-            strategy_name = order.reference
+
+        # Authoritative route: strategy engines keep vt_orderid -> strategy.
+        engine: Any
+        for _app_name, engine in self._strategy_engines:
+            mapping: Any = getattr(engine, "orderid_strategy_map", None)
+            if isinstance(mapping, dict) and trade.vt_orderid in mapping:
+                strategy: Any = mapping[trade.vt_orderid]
+                name: Any = getattr(strategy, "strategy_name", None)
+                if isinstance(name, str):
+                    strategy_name = name
+                    break
+
+        if strategy_name == "unknown":
+            main_engine: MainEngine = self._require_engine()
+            order: OrderData | None = main_engine.get_order(trade.vt_orderid)
+            if order is not None and order.reference:
+                strategy_name = self._strip_app_reference(order.reference)
+
         now: datetime = trade.datetime or datetime.now()
         self.ledger.record(strategy_name, now)
         if strategy_name not in self.health.snapshot():
             self.health.register_strategy(strategy_name)
 
+    def _strip_app_reference(self, reference: str) -> str:
+        """Strip the app_name_ prefix strategy engines put on order references."""
+        app_name: str
+        for app_name in self.config.apps:
+            prefix: str = f"{app_name}_"
+            if reference.startswith(prefix):
+                return reference[len(prefix):]
+        return reference
+
     def _process_order_event(self, event: Event) -> None:
         """Track rejected orders as strategy errors."""
         order: OrderData = event.data
         if order.status == Status.REJECTED:
-            strategy_name: str = order.reference or "unknown"
+            strategy_name: str = self._strip_app_reference(
+                order.reference or "unknown"
+            )
             self.health.record_error(strategy_name)
 
     def _process_log_event(self, event: Event) -> None:
@@ -857,11 +912,28 @@ class AutonomousRunner:
         main_engine: MainEngine | None = self.main_engine
         if main_engine is not None:
             try:
-                main_engine.send_notification(
-                    message, subject="VeighNa Autonomous Trading"
-                )
+                email_server: object = SETTINGS.get("email.server")
+                if email_server:
+                    main_engine.send_notification(
+                        message, subject="VeighNa Autonomous Trading"
+                    )
+                    return
+
+                # 未配置邮件时 send_notification 仍会拉起 SMTP 线程，且
+                # EmailEngine.close() 会 join 它，拖慢时段切换；此时仅走
+                # 已绑定的微信通道。
+                wechat: Any = main_engine.get_engine("wechat")
+                if (
+                    wechat is not None
+                    and getattr(wechat, "creds", None)
+                    and getattr(wechat, "user_id", None)
+                ):
+                    wechat.send_wechat(
+                        f"VeighNa Autonomous Trading\n{message}"
+                    )
             except Exception as exc:   # noqa: BLE001
                 logger.warning("[autonomous] 通知发送失败：%s", exc)
+                return
 
     def _require_engine(self) -> MainEngine:
         """Return the live main engine or raise."""

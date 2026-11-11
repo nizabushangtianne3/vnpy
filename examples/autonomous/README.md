@@ -47,6 +47,7 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
   "CtaStrategy": {
     "strategies": [
       {
+        "class_name": "MyCtaTemplate",
         "name": "my_trend_strategy",
         "vt_symbol": "rb2410.SHFE",
         "setting": {
@@ -61,7 +62,11 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 }
 ```
 
-装配在 `init_engine()` 之后、`init_all_strategies()` 之前执行；条目缺 `name`/`vt_symbol` 会被跳过并记日志，不影响其余条目。引擎没有 `init_strategy` 方法时该项被忽略并给出警告。
+装配在 `init_engine()` 之后、`init_all_strategies()` 之前执行（vnpy_ctastrategy 的 CtaEngine 走 `add_strategy(class_name, name, vt_symbol, setting)`，与界面添加策略同一入口）；条目缺 `class_name`/`vt_symbol` 会被跳过并记日志，不影响其余条目。引擎没有 `add_strategy` 方法时该项被忽略并给出警告。
+
+`class_name` 是策略类名（需已加载进引擎的类表）；`name` 可省略，默认取 `类名_合约代码`。引擎里已存在的同名策略会被跳过，重复启动不会重复装配（vnpy_ctastrategy 的 CtaEngine 会把配置持久化到 `.vntrader/cta_strategy_setting.json`，重启后仍在）。
+
+成交归属走引擎的 `orderid_strategy_map`（vnpy_ctastrategy 维护的 `vt_orderid -> 策略` 映射）；没有该映射时退回解析委托 `reference`（CTA 委托的 reference 形如 `CtaStrategy_策略名`，运行器会剥掉应用名前缀）。
 
 ### `calendar`
 

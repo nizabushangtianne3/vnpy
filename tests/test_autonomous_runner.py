@@ -159,12 +159,54 @@ def test_runner_child_lifecycle_with_fake_gateway(tmp_path) -> None:
         assert len(gateway.orders) == 1
     finally:
         stop_event.set()
-        thread.join(timeout=10)
+        shutdown_started = time.monotonic()
+        thread.join(timeout=30)
+        elapsed = time.monotonic() - shutdown_started
 
     assert not thread.is_alive()
+
+    # 未配置邮件时不得拉起 SMTP 线程，关机必须迅速
+    assert elapsed < 10
     final = read_state(state_path)
     assert final["status"] in ("stop_requested", "stopped")
     assert gateway.closed is True
+
+
+def test_notify_without_email_uses_wechat_only(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from vnpy.trader.setting import SETTINGS
+
+    config_path = build_config_file(tmp_path)
+    runner = AutonomousRunner.from_config_file(config_path)
+
+    sent: list[str] = []
+    wechat_messages: list[str] = []
+    runner.main_engine = SimpleNamespace(
+        send_notification=lambda content, subject=None: sent.append(content),
+        get_engine=lambda name: (
+            SimpleNamespace(
+                creds="creds",
+                user_id="user",
+                send_wechat=wechat_messages.append,
+            )
+            if name == "wechat"
+            else None
+        ),
+    )
+
+    saved_server: object = SETTINGS.get("email.server")
+    try:
+        SETTINGS["email.server"] = ""
+        runner._notify("测试消息")
+        assert sent == []
+        assert wechat_messages == ["VeighNa Autonomous Trading\n测试消息"]
+
+        SETTINGS["email.server"] = "smtp.example.com"
+        runner._notify("第二条")
+        assert sent == ["第二条"]
+    finally:
+        SETTINGS["email.server"] = saved_server
 
 
 def test_session_start_resets_guard_daily_baseline(tmp_path) -> None:

@@ -32,6 +32,7 @@ jobs:
           python -m pip install "ta-lib==0.6.4" --index-url https://pypi.vnpy.com
           python -m pip install -e ".[dev]" "polars>=1.26.0" "scipy>=1.15.2" "pyarrow>=19.0.1" statsmodels matplotlib
           python -m pip install vnpy_sqlite
+          python -m pip install vnpy_ctastrategy
 
       - name: Lint
         run: ruff check .

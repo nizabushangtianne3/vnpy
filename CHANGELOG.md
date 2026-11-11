@@ -3,9 +3,9 @@
 ## 新增
 
 1. 新增自主交易运行器 vnpy.autonomous：交易日历、父级守护与交易子进程编排、事前风控守卫生成器（含单笔数量与名义价值上限、当日亏损与回撤熔断平仓）、策略健康熔断、等权与逆波动率资金分配、状态文件与通知，配套 examples/autonomous 与离线单元测试
-2. vnpy.autonomous 支持在配置中声明 app_settings.strategies，由运行器在 init_engine 后自动装配策略（init_strategy），单个配置文件管理整个组合；应用模块加载失败不再中断交易子进程
-3. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
-2. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
+2. vnpy.autonomous 支持在配置中声明 app_settings.strategies，由运行器在 init_engine 后通过引擎的 add_strategy 接口自动装配策略（与 vnpy_ctastrategy 界面添加入口一致），单个配置文件管理整个组合；应用模块加载失败、引擎初始化失败不再中断交易子进程；成交归属优先走引擎 orderid_strategy_map，CI 增加 vnpy_ctastrategy 真实链路集成测试
+3. vnpy.autonomous 每个交易日开始重置日内风控基准（当日亏损/回撤上限），跨零点夜盘不误触发
+4. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
 
 ## 调整
 

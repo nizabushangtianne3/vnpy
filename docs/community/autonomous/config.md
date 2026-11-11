@@ -12,7 +12,7 @@
 | `risk` | 事前风控上限与熔断开关（见 [risk](./risk.md)） |
 | `health` | 策略健康熔断规则（见 [health](./health.md)） |
 | `portfolio` | 资金分配方法与权重约束（见 [portfolio](./portfolio.md)） |
-| `notification` | 邮件/微信通知开关与心跳间隔 |
+| `notification` | 邮件/微信通知开关与心跳间隔。复用 `MainEngine.send_notification`；未配置邮件服务器时只走已绑定的微信通道并写日志，避免 SMTP 线程拖慢时段切换 |
 | `runtime` | 轮询间隔、状态文件、重启策略、看门狗等运行时参数 |
 
 校验失败时 `load_config` 抛出带全部错误信息的 `ValueError`；`python -m vnpy.autonomous check` 会用同样规则做上线前检查。

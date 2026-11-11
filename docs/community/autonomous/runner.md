@@ -48,11 +48,13 @@ event_engine.put(Event(
 "app_settings": {
   "CtaStrategy": {
     "strategies": [
-      {"name": "my_trend", "vt_symbol": "rb2410.SHFE", "setting": {"class_name": "MyCtaTemplate", "fixed_size": 1}}
+      {"class_name": "MyCtaTemplate", "name": "my_trend", "vt_symbol": "rb2410.SHFE", "setting": {"fixed_size": 1}}
     ]
   }
 }
 ```
+
+vnpy_ctastrategy 的 CtaEngine 通过 `add_strategy(class_name, name, vt_symbol, setting)` 装配（与界面同入口），`name` 可省略（默认 `类名_合约代码`）；已存在的同名策略跳过，重启不重复。成交归属优先使用引擎的 `orderid_strategy_map`，其次解析 `reference` 中的 `应用名_` 前缀。
 
 加载的引擎若暴露 `strategies` 字典（`vnpy_ctastrategy` 的 CtaEngine 即是），运行器会自动挂载 `vnpy.autonomous.adapters.cta.CtaStatsAdapter`，在主循环里把每个策略的 `trading`/`pos`/`trades` 状态以及 `variables` 中的 `realized_pnl`、`equity` 包装成 `StrategySnapshot` 事件发出，健康监控据此做按策略盈亏的熔断，资金分配器据此估计波动率。策略只需在 `variables` 里维护 `realized_pnl` 与 `equity` 两个键即可接入。
 

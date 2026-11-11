@@ -67,7 +67,8 @@ class FakeStrategyEngine(BaseEngine):
         self.inited_all: bool = False
         self.started_all: bool = False
         self.stopped_all: bool = False
-        self.provisioned: list[tuple[str, str, dict]] = []
+        self.provisioned: list[tuple[str, str, str, dict]] = []
+        self.orderid_strategy_map: dict[str, object] = {}
         self.paused: list[str] = []
         self.resumed: list[str] = []
 
@@ -83,9 +84,13 @@ class FakeStrategyEngine(BaseEngine):
     def stop_all_strategies(self) -> None:
         self.stopped_all = True
 
-    def init_strategy(self, name: str, vt_symbol: str, setting: dict) -> None:
-        self.provisioned.append((name, vt_symbol, dict(setting)))
-        self.strategies[name] = {"vt_symbol": vt_symbol}
+    def add_strategy(
+        self, class_name: str, strategy_name: str, vt_symbol: str, setting: dict
+    ) -> None:
+        self.provisioned.append(
+            (class_name, strategy_name, vt_symbol, dict(setting))
+        )
+        self.strategies[strategy_name] = {"vt_symbol": vt_symbol}
 
     def stop_strategy(self, strategy_name: str) -> None:
         self.paused.append(strategy_name)
@@ -95,9 +100,9 @@ class FakeStrategyEngine(BaseEngine):
 
 
 class PlainStrategyEngine(FakeStrategyEngine):
-    """Engine without the init_strategy provisioning API."""
+    """Engine without the add_strategy provisioning API."""
 
-    init_strategy = None
+    add_strategy = None
 
 
 class FakeStrategyApp(BaseApp):
@@ -119,11 +124,13 @@ def build_config_file(tmp_path) -> str:
             APP_NAME: {
                 "strategies": [
                     {
+                        "class_name": "DemoStrategy",
                         "name": "demo_trend",
                         "vt_symbol": "rb2410.SHFE",
                         "setting": {"fixed_size": 1, "class_names": ["Demo"]},
                     },
                     {"vt_symbol": "missing_name"},
+                    {"class_name": "AutoNamed", "vt_symbol": "rb2601.SHFE"},
                     "not_a_dict",
                 ]
             }
@@ -178,21 +185,46 @@ def test_runner_provisions_strategies_from_config(tmp_path) -> None:
         # 合法条目完成装配，非法条目被跳过且不影响其他条目
         assert engine.provisioned == [
             (
+                "DemoStrategy",
                 "demo_trend",
                 "rb2410.SHFE",
                 {"fixed_size": 1, "class_names": ["Demo"]},
-            )
+            ),
+            (
+                "AutoNamed",
+                "AutoNamed_rb2601",
+                "rb2601.SHFE",
+                {},
+            ),
         ]
-        assert list(engine.strategies) == ["demo_trend"]
+        assert sorted(engine.strategies) == ["AutoNamed_rb2601", "demo_trend"]
 
         # 快照适配器自动挂载，健康监控开始跟踪该策略
         assert runner._stats_adapters
     finally:
         stop_event.set()
-        thread.join(timeout=10)
+        thread.join(timeout=30)
 
     assert not thread.is_alive()
     assert engine.stopped_all is True
+
+
+def test_provisioning_is_idempotent_across_restarts(tmp_path) -> None:
+    runner = AutonomousRunner.from_config_file(build_config_file(tmp_path))
+    main_engine = MainEngine()
+    try:
+        event_engine = EventEngine()
+        engine = FakeStrategyEngine(main_engine, event_engine, "fake")
+        runner._strategy_engines = [(APP_NAME, engine)]
+
+        runner._provision_strategies(APP_NAME, engine)
+        first_count = len(engine.provisioned)
+        runner._provision_strategies(APP_NAME, engine)
+
+        # 引擎已存在的策略名被跳过，不会重复装配
+        assert len(engine.provisioned) == first_count
+    finally:
+        main_engine.close()
 
 
 def test_provisioning_skipped_when_engine_lacks_init_strategy(tmp_path) -> None:
