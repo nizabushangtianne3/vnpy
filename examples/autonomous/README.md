@@ -47,7 +47,7 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
   "CtaStrategy": {
     "strategies": [
       {
-        "class_name": "MyCtaTemplate",
+        "class_name": "AutonomousTrendStrategy",
         "name": "my_trend_strategy",
         "vt_symbol": "rb2410.SHFE",
         "setting": {
@@ -112,7 +112,7 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 - `state_file`：状态文件路径（相对配置文件目录），父进程据此判断子进程存活。
 - `contract_wait_secs`：等待合约推送的超时；`strategy_init_wait_secs`：策略初始化等待。
 - `flat_on_session_end`：时段结束是否市价平仓（默认否，仅停止策略）。
-- `restart_backoff_secs` / `max_restarts_per_session`：同一交易时段内的重启冷却与次数上限，超过则等到下一时段。
+- `restart_backoff_secs` / `max_restarts_per_session`：同一交易时段内的重启冷却与次数上限；达到上限后进入冷却（不低于 30 秒），冷却结束自动重置计数并重试，不会整日停止交易。
 - `watchdog_stall_secs` / `auto_reconnect`：网关事件停滞阈值与自动重连开关。
 
 ## 状态文件
@@ -122,3 +122,20 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 ## 与 Freqtrade 类项目对照
 
 本包对齐了成熟开源交易机器人的运维模式：Freqtrade 的「循环 + dry-run + 持久化」、Hummingbot 的「控制器-执行器分层」；风控守卫生成器类似交易所侧事前风控（vnpy_riskmanager 的脚本化替代），健康熔断类似策略级断路器。
+
+## 附带参考策略
+
+[strategies/autonomous_trend_strategy.py](strategies/autonomous_trend_strategy.py) 是专为自治循环写的双均线趋势策略：
+
+- 通过 `variables` 持续上报 `realized_pnl` 与 `equity`，`CtaStatsAdapter` 据此驱动策略健康熔断与资金分配；没有上报的策略，这两类规则对其保持关闭。
+- 内置 `max_position` 仓位自检与 ATR bar 止损，单策略不会超出风控守卫生成器的预期边界。
+- 已覆盖「预热 → 金叉开仓 → 成交记账 → ATR 止损平仓 → 盈亏变量」全链路的真实引擎测试。
+
+使用方式：
+
+```bash
+mkdir .vntrader/strategies
+cp examples/autonomous/strategies/autonomous_trend_strategy.py .vntrader/strategies/
+```
+
+CtaEngine 初始化时扫描 `.vntrader/strategies/` 加载该类，然后在 `app_settings.CtaStrategy.strategies` 里把 `class_name` 写成 `AutonomousTrendStrategy`。`vnpy_ctastrategy` 自带的演示策略同样可被扫描加载和装配。
