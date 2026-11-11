@@ -36,15 +36,15 @@ def test_ensure_utf8_output_survives_cp1252_stdout(tmp_path) -> None:
     result = subprocess.run(
         [sys.executable, str(script)],
         capture_output=True,
-        text=True,
         env=env,
         cwd=str(tmp_path),
         timeout=120,
     )
 
-    assert "BEFORE_FAIL" in result.stdout
-    assert "AFTER_OK" in result.stdout
-    assert "\u4e2d\u6587\u6d4b\u8bd5" in result.stdout
+    stdout: str = result.stdout.decode("utf-8", errors="replace")
+    assert "BEFORE_FAIL" in stdout
+    assert "AFTER_OK" in stdout
+    assert "\u4e2d\u6587\u6d4b\u8bd5" in stdout
 
 
 def test_ensure_utf8_output_tolerates_capture_streams() -> None:
