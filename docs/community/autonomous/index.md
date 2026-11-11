@@ -13,6 +13,8 @@
 | [portfolio](./portfolio.md) | 资金分配：等权与逆波动率，水填法应用权重上限 |
 | [runner](./runner.md) | 父级守护 + 交易子进程编排，状态文件与心跳 |
 
+从仿真到实盘的推进节奏见 [晋升手册](./promotion.md)。
+
 ## 运行方式
 
 ```bash
