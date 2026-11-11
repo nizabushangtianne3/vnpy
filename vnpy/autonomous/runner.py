@@ -296,6 +296,9 @@ class AutonomousRunner:
                     logger.info("[autonomous] 父级守护进程收到停止事件")
                     if child is not None and child.is_alive():
                         child.terminate()
+                    if child is not None:
+                        # 等待子进程真正退出，避免它仍持有数据库文件句柄
+                        child.join(timeout=10)
                     self._write_parent_state("stopped")
                     return
                 now: datetime = datetime.now()
@@ -329,6 +332,7 @@ class AutonomousRunner:
                         if child.is_alive():
                             logger.warning("[autonomous] 子进程未能在时段结束后退出，强制结束")
                             child.terminate()
+                            child.join(timeout=10)
                         child = None
                         self.restarts_in_session = 0
                         self._write_parent_state("idle_between_sessions")
@@ -338,6 +342,8 @@ class AutonomousRunner:
                 logger.info("[autonomous] 父级守护进程收到退出信号")
                 if child is not None and child.is_alive():
                     child.terminate()
+                if child is not None:
+                    child.join(timeout=10)
                 self._write_parent_state("stopped")
                 return
 
