@@ -17,7 +17,9 @@ from vnpy.autonomous.runner import (
     read_state,
     resolve_gateway_class,
 )
+from vnpy.autonomous.risk import RiskGuard
 from vnpy.event import EventEngine
+from vnpy.trader.engine import MainEngine
 from vnpy.trader.constant import Direction, Exchange, Offset, OrderType
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.object import CancelRequest, OrderRequest, SubscribeRequest
@@ -139,6 +141,7 @@ def test_runner_child_lifecycle_with_fake_gateway(tmp_path) -> None:
         payload = wait_state(state_path, {"strategies_started", "trading"})
         assert payload["mode"] == "paper"
         assert payload["session"] == "all_day"
+        assert runner._active_session_day is not None
 
         main_engine = runner.main_engine
         assert main_engine is not None
@@ -162,6 +165,46 @@ def test_runner_child_lifecycle_with_fake_gateway(tmp_path) -> None:
     final = read_state(state_path)
     assert final["status"] in ("stop_requested", "stopped")
     assert gateway.closed is True
+
+
+def test_session_start_resets_guard_daily_baseline(tmp_path) -> None:
+    config_path = build_config_file(tmp_path)
+    runner = AutonomousRunner.from_config_file(config_path)
+
+    main_engine = MainEngine()
+    try:
+        from vnpy.event import Event
+        from vnpy.trader.event import EVENT_ACCOUNT
+        from vnpy.trader.object import AccountData
+
+        guard = RiskGuard(main_engine, runner.config.risk)
+        guard.install()
+        guard.register_events(main_engine.event_engine)
+        runner.main_engine = main_engine
+        runner.guard = guard
+
+        main_engine.event_engine.put(
+            Event(
+                EVENT_ACCOUNT,
+                AccountData(
+                    gateway_name="FAKE",
+                    accountid="demo",
+                    balance=100000,
+                    frozen=0,
+                ),
+            )
+        )
+        deadline = time.monotonic() + 2
+        while guard.state.current_balance != 100000 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert guard.state.current_balance == 100000
+
+        # 盘中把基准改到别的值，时段开始时应重置回当前权益
+        guard.state.day_start_balance = 80000
+        runner._on_session_start()
+        assert guard.state.day_start_balance == 100000
+    finally:
+        main_engine.close()
 
 
 def test_calendar_built_from_config_profile(tmp_path) -> None:

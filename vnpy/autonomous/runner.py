@@ -404,10 +404,12 @@ class AutonomousRunner:
         poll: float = runtime.poll_interval_secs
         strategies_started: bool = False
         self._status = "trading"
+        self._active_session_day: object = None
 
         while True:
             now: datetime = datetime.now()
             session: Session | None = self.calendar.current_session(now)
+            session_day: object = self.calendar.session_day(now)
 
             if self.stop_event is not None and self.stop_event.is_set():
                 if strategies_started and runtime.stop_strategies_on_exit:
@@ -431,11 +433,19 @@ class AutonomousRunner:
             if not strategies_started:
                 self._start_strategy_engines()
                 strategies_started = True
+                self._active_session_day = session_day
+                self._on_session_start()
                 if self.config.notification.notify_on_start:
                     self._notify(
                         f"交易时段 {session.name} 开始，策略已启动"
                     )
                 self._write_state("strategies_started")
+            elif session_day != self._active_session_day:
+                # A new trading day began while strategies stay running
+                # (overnight sessions keep the start day, so midnight does
+                # not trigger a reset).
+                self._active_session_day = session_day
+                self._on_session_start()
 
             if self.guard is not None and self.guard.armed:
                 self._write_state("risk_armed")
@@ -447,8 +457,15 @@ class AutonomousRunner:
 
             time.sleep(poll)
 
+    def _on_session_start(self) -> None:
+        """Reset daily risk counters when a trading day begins."""
+        if self.guard is not None:
+            self.guard.reset_daily()
+        logger.info("[autonomous] 新交易日开始，日内风控计数器已重置")
+
     def _connect_gateways(self) -> None:
         """Connect every configured gateway."""
+        self._active_session_day = None
         main_engine: MainEngine = self._require_engine()
         name: str
         setting: dict[str, object]
