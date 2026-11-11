@@ -78,6 +78,23 @@ VeighNa发布十周年之际正式推出4.0版本，重磅新增面向AI量化�
 vnpy.alpha模块的设计理念受到[Qlib](https://github.com/microsoft/qlib)项目的启发，在保持易用性的同时提供强大的AI量化能力，特此向Qlib开发团队致以诚挚感谢！
 
 
+## Autonomous
+
+[vnpy.autonomous](./vnpy/autonomous) 是框架内置的**无人值守交易运维层**，让策略组合在真实交易日历下自主运行：
+
+* :alarm_clock: **[交易日历](./vnpy/autonomous/calendar.py)**：日盘/夜盘时段、跨零点归属、节假日清单，时段外自动停机、时段内自动拉起
+* :shield: **[事前风控](./vnpy/autonomous/risk.py)**：包裹 `MainEngine.send_order` 的风控守卫生成器，单笔数量/价值、活动委托、净头寸上限，当日亏损与回撤触发熔断平仓
+* :heartbeat: **[健康熔断](./vnpy/autonomous/health.py)**：策略级连续亏损、当日亏损、错误率监控，自动暂停与冷却恢复
+* :balance_scale: **[资金分配](./vnpy/autonomous/portfolio.py)**：等权与逆波动率配置，权重上限水填算法
+* :satellite: **[运行编排](./vnpy/autonomous/runner.py)**：父级守护进程 + 交易子进程，崩溃重启、网关看门狗、状态文件与邮件/微信通知
+
+```bash
+python -m vnpy.autonomous check   # 校验配置与日历
+python -m vnpy.autonomous run     # 启动自主交易守护进程
+```
+
+详细文档见 [自主交易运行器](./docs/community/autonomous/index.md)，配置示例见 [examples/autonomous](./examples/autonomous)。
+
 ## 功能特点
 
 带有 :arrow_up: 的模块代表已经完成4.0版本的升级适配测试，同时4.0核心框架采用了优先保证兼容性的升级方式，因此大多数模块也都可以直接使用（涉及到C++ API封装的接口必须升级后才能使用）。 

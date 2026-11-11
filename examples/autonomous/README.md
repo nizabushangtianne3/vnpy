@@ -1,0 +1,96 @@
+# VeighNa 自主交易示例
+
+本示例演示如何用 `vnpy.autonomous` 包把一个策略组合跑成「无人值守」的自主交易进程：
+
+1. 父级守护进程按交易日历在交易时段内拉起交易子进程，时段结束自动退出，崩溃自动重启（有次数上限）。
+2. 交易子进程内部装配 MainEngine、交易接口、策略应用，挂载事前风控守卫生成器、策略健康熔断和资金分配器。
+3. 全过程通过 `.vntrader/autonomous_state.json` 状态文件暴露心跳，可通过邮件/微信通知推送关键事件。
+
+## 快速开始
+
+```bash
+# 1. 准备配置（复制模板到 .vntrader 后填写账号与风控参数）
+mkdir .vntrader
+cp examples/autonomous/autonomous.json .vntrader/autonomous.json
+cp examples/autonomous/holidays.example.json .vntrader/holidays.json
+
+# 2. 校验配置并查看交易日历
+python examples/autonomous/run.py check --config .vntrader/autonomous.json
+
+# 3. 后续交易时段
+python examples/autonomous/run.py sessions --count 5 --config .vntrader/autonomous.json
+
+# 4. 启动守护进程（正式运行；先建议用纸面交易模式验证）
+python examples/autonomous/run.py run --config .vntrader/autonomous.json
+```
+
+等价地也可以直接使用模块入口：`python -m vnpy.autonomous check`。
+
+## 配置说明
+
+### `mode`
+
+`paper` 或 `live`。仅作标识，随通知一起发送，方便人工确认运行模式。
+
+### `gateways`
+
+以「接口名称 -> 设置字典」组织，字典原样传给 `vnpy_xxx` 网关（键名沿用各网关文档，如 CTP 的「用户名」「密码」）。内置名称：`CTP`、`CTP Mini`、`CTP证券`、`易盛`、`XTP`、`TORA`、`TTS`、`FEMAS`、`顶点HTS`、`顶点飞创`、`IB`；未覆盖的接口可直接写 `"module:Class"` 导入路径，例如 `"my_gateway.pack:MyGateway"`。
+
+### `apps`
+
+需要加载的功能模块列表，支持内置名称（`CtaStrategy`、`PortfolioStrategy`、`RiskManager`、`PaperAccount`、`SpreadTrading`、`OptionMaster`、`AlgoTrading`、`ScriptTrader`、`ChartWizard`、`DataManager`、`DataRecorder`）或 `"module:Class"` 导入路径。含有 `init_engine`/`init_all_strategies`/`start_all_strategies` 方法的引擎会被纳入时段启停管理。
+
+### `calendar`
+
+- `profile`：`cn_futures`（默认，日盘 09:00-11:30、13:30-15:00，夜盘 21:00-night_end）、`cn_futures_midnight`（夜盘至 02:30）、`full_day`（7x24，忽略周末）。
+- `night_end`：默认 `23:00`，贵金属/原油等可改 `02:30`。
+- `holidays_file`：节假日清单（JSON 字符串数组，如 `["2027-01-01"]`），相对于配置文件所在目录解析。**示例文件为空数组**，请按各交易所休市安排自行维护。
+- `sessions`：留空使用模板；也可显式列出 `[{"name": "...", "start": "HH:MM", "end": "HH:MM"}]` 自定义时段（`end` 早于 `start` 表示跨零点）。
+
+夜盘归属「开始当日」：如周五夜盘跨到周六凌晨，仍算周五的交易时段，周六其余时间休市。
+
+### `risk`
+
+事前风控，拦截不合规委托（返回空 `vt_orderid`）。`0` 表示不限制。
+
+| 字段 | 含义 |
+| --- | --- |
+| `max_order_volume` | 单笔委托数量上限（同时受合约最小/最大申报单位约束） |
+| `max_order_value` | 单笔名义价值上限（价格 x 数量 x 合约乘数） |
+| `max_active_orders` | 全账户活动委托上限 |
+| `max_position_volume` | 单合约净头寸默认上限，可用 `symbol_position_limits` 按合约覆盖 |
+| `daily_loss_limit` | 当日权益亏损上限，以当日首笔账户权益为基准 |
+| `max_drawdown` | 自时段内峰值权益的回撤上限 |
+| `kill_switch_on_breach` | 触发后撤销全部活动委托并市价平掉所有持仓 |
+| `allow_reduce_when_armed` | 熔断状态下是否仍允许平仓/减仓单 |
+
+熔断触发后会发送通知，并需在 `.vntrader/autonomous_state.json` 确认后手动调用 `RiskGuard.disarm()`（或重启进程）才会恢复开仓。
+
+### `health`
+
+策略级健康熔断：连续亏损、当日亏损、单位时间错误次数达到阈值即暂停该策略（调用引擎的 `stop_strategy`），冷却结束后自动 `start_strategy` 恢复。`0` 表示不启用该规则。
+
+### `portfolio`
+
+`method` 为 `equal` 或 `inverse_volatility`，按账户权益给出各策略的目标资金（仅供参考，需要策略自行读取使用）；`max_weight` 为单策略权重上限，采用水填算法分配。
+
+### `notification`
+
+复用 `MainEngine.send_notification`，按 `vt_setting.json` 里的邮件/微信配置发送。`heartbeat_secs` 控制心跳通知间隔。
+
+### `runtime`
+
+- `poll_interval_secs`：子进程主循环间隔。
+- `state_file`：状态文件路径（相对配置文件目录），父进程据此判断子进程存活。
+- `contract_wait_secs`：等待合约推送的超时；`strategy_init_wait_secs`：策略初始化等待。
+- `flat_on_session_end`：时段结束是否市价平仓（默认否，仅停止策略）。
+- `restart_backoff_secs` / `max_restarts_per_session`：同一交易时段内的重启冷却与次数上限，超过则等到下一时段。
+- `watchdog_stall_secs` / `auto_reconnect`：网关事件停滞阈值与自动重连开关。
+
+## 状态文件
+
+`.vntrader/autonomous_state.json` 原子更新，内容包括：进程角色、模式、当前时段、距下次开盘时间、风控快照、各策略健康度、资金分配、成交台账、各网关最近事件时间。外部值守脚本（如看门狗、大屏）可直接读取。
+
+## 与 Freqtrade 类项目对照
+
+本包对齐了成熟开源交易机器人的运维模式：Freqtrade 的「循环 + dry-run + 持久化」、Hummingbot 的「控制器-执行器分层」；风控守卫生成器类似交易所侧事前风控（vnpy_riskmanager 的脚本化替代），健康熔断类似策略级断路器。

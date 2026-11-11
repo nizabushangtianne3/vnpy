@@ -1,0 +1,69 @@
+{
+  "mode": "paper",
+  "gateways": {
+    "CTP": {
+      "用户名": "",
+      "密码": "",
+      "经纪商代码": "",
+      "交易服务器": "",
+      "行情服务器": "",
+      "产品名称": "",
+      "授权编码": "",
+      "产品信息": ""
+    }
+  },
+  "apps": [
+    "CtaStrategy"
+  ],
+  "app_settings": {},
+  "calendar": {
+    "profile": "cn_futures",
+    "night_end": "23:00",
+    "holidays_file": "holidays.json",
+    "sessions": null
+  },
+  "risk": {
+    "max_order_volume": 0,
+    "max_order_value": 0,
+    "max_active_orders": 0,
+    "max_position_volume": 0,
+    "symbol_position_limits": {},
+    "daily_loss_limit": 0,
+    "max_drawdown": 0,
+    "kill_switch_on_breach": true,
+    "allow_reduce_when_armed": true
+  },
+  "health": {
+    "max_consecutive_losses": 5,
+    "max_daily_loss": 0,
+    "max_error_count": 10,
+    "error_window_secs": 3600,
+    "halt_cooldown_secs": 1800
+  },
+  "portfolio": {
+    "method": "equal",
+    "max_weight": 0.5,
+    "min_weight": 0.0,
+    "cash_fraction": 0.1,
+    "vol_window": 60
+  },
+  "notification": {
+    "notify_on_start": true,
+    "notify_on_error": true,
+    "notify_on_breach": true,
+    "notify_on_session_end": true,
+    "heartbeat_secs": 1800
+  },
+  "runtime": {
+    "poll_interval_secs": 1.0,
+    "state_file": "autonomous_state.json",
+    "contract_wait_secs": 60.0,
+    "strategy_init_wait_secs": 30.0,
+    "flat_on_session_end": false,
+    "stop_strategies_on_exit": true,
+    "restart_backoff_secs": 30.0,
+    "max_restarts_per_session": 5,
+    "watchdog_stall_secs": 300.0,
+    "auto_reconnect": true
+  }
+}
