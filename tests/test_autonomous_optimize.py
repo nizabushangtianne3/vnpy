@@ -147,3 +147,38 @@ def test_optimize_rejects_mismatched_walk_forward_lengths() -> None:
     combined: str = result.stdout + result.stderr
     assert "--train-bars 与 --test-bars 必须同时设置" in combined
     assert result.returncode == 2
+
+
+def test_optimize_rejects_bars_below_single_fold() -> None:
+    """Fewer bars than train+test must fail cleanly, not crash on /0."""
+    import os
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-m",
+            "vnpy.autonomous",
+            "optimize",
+            "--grid",
+            "fast_window=5",
+            "--bars",
+            "120",
+            "--train-bars",
+            "100",
+            "--test-bars",
+            "25",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+        timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    combined: str = result.stdout + result.stderr
+    assert "K线不足以组成一个完整的 walk-forward 折叠" in combined, combined
+    assert result.returncode == 2

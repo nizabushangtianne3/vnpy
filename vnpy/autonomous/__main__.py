@@ -461,6 +461,13 @@ def command_optimize(args: argparse.Namespace) -> int:
             f"walk-forward 验证：训练 {args.train_bars} 根，"
             f"测试 {args.test_bars} 根，总共 {len(bars)} 根K线"
         )
+        if len(bars) < args.train_bars + args.test_bars:
+            print(
+                "错误：K线不足以组成一个完整的 walk-forward 折叠，"
+                f"需要至少 {args.train_bars + args.test_bars} 根，"
+                f"当前只有 {len(bars)} 根"
+            )
+            return 2
         window_start: int = 0
         fold_results: list[dict] = []
         while window_start + args.train_bars + args.test_bars <= len(bars):
