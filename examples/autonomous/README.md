@@ -119,6 +119,35 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 `.vntrader/autonomous_state.json` 原子更新，内容包括：进程角色、模式、当前时段、距下次开盘时间、风控快照、各策略健康度、资金分配、成交台账、各网关最近事件时间。外部值守脚本（如看门狗、大屏）可直接读取。
 
+## 开机自启（Windows 计划任务）
+
+无人值守需要进程不依赖人工登录。[install_service.ps1](install_service.ps1) 把守护进程注册成 Windows 计划任务：
+
+```powershell
+# 以管理员身份打开 PowerShell，然后：
+
+# 注册：登录与开机时自动启动，隐藏窗口，进程退出后自动重启
+.\install_service.ps1 install
+
+# 查看任务状态与最近一次运行结果
+.\install_service.ps1 status
+
+# 卸载
+.\install_service.ps1 uninstall
+```
+
+任务动作等价于命令行启动，只是不再需要有人守在电脑前：
+
+```
+<python> -m vnpy.autonomous run --config "<仓库>/.vntrader/autonomous.json"
+```
+
+几个需要注意的点：
+
+- **需要管理员权限**。任务以最高权限运行（`RunLevel Highest`），非管理员 PowerShell 注册会失败并给出明确提示，不会假报成功。
+- **解释器不跟随安装时的 shell**。默认依次查找 `<仓库>/.venv\Scripts\python.exe`、`<仓库>/venv\Scripts\python.exe`，再用 PATH 上的 `python.exe`；也可以用 `-PythonPath` 指定。注册前会跑一次 `python -m vnpy.autonomous run --help` 预检，解释器跑不起来就不注册。
+- **配置文件必须先就位**。`install` 会检查 `.vntrader/autonomous.json` 存在，不会带着空配置开机自启。
+- **动作里带 `--config` 全路径**，所以计划任务的工作目录变化不影响它读到正确配置。
 ## 与 Freqtrade 类项目对照
 
 本包对齐了成熟开源交易机器人的运维模式：Freqtrade 的「循环 + dry-run + 持久化」、Hummingbot 的「控制器-执行器分层」；风控守卫生成器类似交易所侧事前风控（vnpy_riskmanager 的脚本化替代），健康熔断类似策略级断路器。

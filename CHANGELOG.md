@@ -6,8 +6,10 @@
 2. vnpy.autonomous 支持在配置中声明 app_settings.strategies，由运行器在 init_engine 后通过引擎的 add_strategy 接口自动装配策略（与 vnpy_ctastrategy 界面添加入口一致），单个配置文件管理整个组合；应用模块加载失败、引擎初始化失败不再中断交易子进程；成交归属优先走引擎 orderid_strategy_map，CI 增加 vnpy_ctastrategy 真实链路集成测试
 3. vnpy.autonomous 每个交易日开始重置日内风控基准（当日亏损/回撤上限），跨零点夜盘不误触发；父级守护进程重启达到上限后进入冷却并自动恢复重试，不再整日罢工
 4. 新增自治参考策略 examples/autonomous/strategies/autonomous_trend_strategy.py：双均线 + ATR 止损 + 仓位自检，通过 variables 上报 realized_pnl/equity 供健康熔断与资金分配消费，附真实引擎全链路测试
-4. 新增父级守护进程真进程集成测试（spawn 真实子进程走完整链路）与重启冷却恢复测试
-6. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
+5. 新增父级守护进程真进程集成测试（spawn 真实子进程走完整链路）与重启冷却恢复测试
+6. 新增原子状态文件写入（带重试）与 Windows 并发读安全，父进程 terminate 后等待子进程真正退出，交易子进程退出时关闭数据库句柄，避免测试与计划任务场景下残留句柄导致文件占用
+7. vnpy_ctabacktester的回测配置按策略名分组保存，切换策略时自动恢复；没有历史配置时回到界面初始值
+8. 新增 examples/autonomous/install_service.ps1：把自主交易守护进程注册为 Windows 计划任务，登录与开机自动启动、隐藏窗口、进程退出后按一分钟间隔自动重启、无执行时限；注册前校验配置文件存在并做解释器预检，非管理员权限下明确报错而不是假报成功，提供 install / uninstall / status 三个子命令，附只读回归测试
 
 ## 调整
 
