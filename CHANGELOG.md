@@ -13,6 +13,7 @@
 9. 新增 vnpy.autonomous.backtest 离线策略验收模块与 `python -m vnpy.autonomous backtest` 子命令：驱动真实 CtaTemplate 策略跑完一段 K 线并输出成交笔数、胜率、已实现与浮动盈亏、权益、最大回撤、夏普；total_pnl <= 0 时命令返回 1 可直接作为流水线门槛。成交模型复刻 vnpy_ctastrategy 官方回测器：第 N 根 K 线挂出的限价单仅当第 N+1 根 K 线穿过该价位才成交，成交价取该根开盘价，滑点方向始终不利于交易者，手续费按次计收。vnpy_ctastrategy 改为惰性导入，缺失时整个 autonomous 包仍可用
     a. 新增 CSV 与 VeighNa 数据库两条真实数据源路径：`--csv` 支持 datetime,open_price,high_price,low_price,close_price[,volume]，允许表头逗号、数据行空格的混合分隔；`--start/--end` 走 get_database()，与实盘加载同一批数据
     b. 空格分隔数据行的时间戳含空格，普通 DictReader 会把时间与价格折叠成一个字段，专用解析器按行拆分并保持 datetime 完整
+10. 新增 `python -m vnpy.autonomous optimize` 参数扫描子命令：`--grid` 展开 `fast_window=5,10;slow_window=20,40` 形式的笛卡尔积，驱动同一策略在每个参数组合上重复回测，按夏普排序输出 total_pnl / max_drawdown / trade_count / win_rate，全部组合 total_pnl <= 0 时返回 1 可直接作为流水线门槛
 10. 修复参考策略 realized_pnl / equity 未乘合约乘数的问题：这两个变量是货币金额，未乘数会让健康熔断与资金分配按放大了 size 倍的错误盈亏做决策，实盘下等子系统被误导
 
 ## 调整

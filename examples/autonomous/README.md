@@ -139,6 +139,14 @@ python -m vnpy.autonomous backtest --vt-symbol rb2410.SHFE --start 2024-01-01 --
 
 CSV 允许表头用逗号、数据行用空格的混合格式（真实行情导出常见），`datetime` 需带日期与时间。
 
+单次回测只能回答「这一组参数行不行」。要看参数稳定性，用 `optimize` 在网格上扫一遍：
+
+```bash
+python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40" --csv path/to/rb2410_1min.csv
+```
+
+输出按夏普排序的参数表，包含每组的 `total_pnl`、`max_drawdown`、`trade_count`、`win_rate`。所有组合 `total_pnl <= 0` 时返回 1，可直接当流水线门槛。
+
 它驱动真实的 `CtaTemplate` 策略跑完一段 K 线，输出成交笔数、胜率、已实现/浮动盈亏、权益、最大回撤与夏普：
 
 ```
