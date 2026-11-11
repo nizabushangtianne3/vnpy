@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--vt-symbol", default="rb9999.SHFE", help="合约代码")
     backtest_parser.add_argument("--bars", type=int, default=200, help="生成K线数量")
     backtest_parser.add_argument("--seed", type=int, default=7, help="随机种子")
+    backtest_parser.add_argument("--csv", default="", help="从CSV读取K线（datetime,open,high,low,close[,volume]），给定后忽略合成数据")
+    backtest_parser.add_argument("--exchange", default="SHFE", help="交易所名称，仅 --csv 使用")
+    backtest_parser.add_argument("--interval", default="MINUTE", help="K线周期，仅 --csv 使用")
+    backtest_parser.add_argument("--start", default="", help="起止时间，仅数据库数据源使用，如 2024-01-01")
+    backtest_parser.add_argument("--end", default="", help="结束时间，仅数据库数据源使用")
     backtest_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
     backtest_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
     backtest_parser.add_argument("--size", type=int, default=10, help="合约倍数")
@@ -154,30 +159,64 @@ def command_backtest(args: argparse.Namespace) -> int:
         print(f"错误：{args.strategy} 不在 {strategy_path} 中")
         return 2
 
-    # Synthetic rotating drift: both cross directions occur, and the series is
-    # reproducible through --seed. A real campaign swaps this for database bars.
-    random.seed(args.seed)
-    base: datetime = datetime(2024, 1, 2, 9, 0)
-    price: float = 3500.0
-    bars: list = []
-    for index in range(max(args.bars, 60)):
-        close: float = (
-            price
-            + 4.0 * math.sin(index / 45.0)
-            + 0.4
-            + (random.random() - 0.5) * 5.0
+    # Prefer real data when the caller supplies it. A synthetic series only
+    # proves the plumbing works, so the CSV and database paths are the ones
+    # that can support a real promotion decision.
+    from .backtest import (
+        load_bars_from_csv,
+        load_bars_from_database,
+        parse_exchange,
+        parse_interval,
+    )
+
+    if args.csv:
+        bars = load_bars_from_csv(
+            args.csv,
+            args.vt_symbol.split(".")[0],
+            exchange=parse_exchange(args.exchange),
+            interval=parse_interval(args.interval),
         )
-        open_price: float = price
-        bars.append(
-            build_bar(
-                base + timedelta(minutes=index),
-                open_price,
-                max(open_price, close) + random.random() * 4.0,
-                min(open_price, close) - random.random() * 4.0,
-                close,
+        print(f"数据来源：CSV {args.csv}，共 {len(bars)} 根K线")
+    elif args.start or args.end:
+        start = datetime.fromisoformat(args.start) if args.start else datetime(2024, 1, 1)
+        end = (
+            datetime.fromisoformat(args.end) if args.end else datetime.now()
+        )
+        bars = load_bars_from_database(
+            args.vt_symbol.split(".")[0],
+            parse_exchange(args.exchange),
+            parse_interval(args.interval),
+            start,
+            end,
+        )
+        print(f"数据来源：数据库 {args.vt_symbol}，共 {len(bars)} 根K线")
+    else:
+        import math
+        import random
+
+        random.seed(args.seed)
+        base: datetime = datetime(2024, 1, 2, 9, 0)
+        price: float = 3500.0
+        bars = []
+        for index in range(max(args.bars, 60)):
+            close: float = (
+                price
+                + 4.0 * math.sin(index / 45.0)
+                + 0.4
+                + (random.random() - 0.5) * 5.0
             )
-        )
-        price = close
+            open_price: float = price
+            bars.append(
+                build_bar(
+                    base + timedelta(minutes=index),
+                    open_price,
+                    max(open_price, close) + random.random() * 4.0,
+                    min(open_price, close) - random.random() * 4.0,
+                    close,
+                )
+            )
+            price = close
+        print(f"数据来源：合成行情（{len(bars)} 根，seed={args.seed}）")
 
     strategy = strategy_class(
         cta_engine=None,
@@ -196,7 +235,7 @@ def command_backtest(args: argparse.Namespace) -> int:
         ),
     )
 
-    print("回测结果（合成行情，真实决策前请替换为真实K线）：")
+    print("回测结果：")
     for key, value in result.summary().items():
         print(f"  {key:16} {value}")
 

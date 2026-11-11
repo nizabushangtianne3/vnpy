@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from vnpy.trader.constant import Direction, Exchange, Interval, Offset
@@ -422,3 +423,157 @@ def build_bar(
         close_price=close_price,
         gateway_name="BACKTEST",
     )
+
+
+# Bar sources. A campaign is only as good as its data, so the two realistic
+# paths are supported instead of only the synthetic generator.
+
+
+def load_bars_from_csv(
+    path: str,
+    symbol: str,
+    exchange: Exchange = Exchange.SHFE,
+    interval: Interval = Interval.MINUTE,
+) -> list[BarData]:
+    """Load bars from a CSV export.
+
+    Expected header (extra columns are ignored, missing optional columns fall
+    back to a reasonable value):
+
+        datetime,open_price,high_price,low_price,close_price[,volume]
+
+    ``datetime`` must be parseable by :func:`datetime.fromisoformat`, for
+    example ``2024-01-02 09:00:00``. Rows are returned in file order: the
+    caller is responsible for handing the strategy a sorted series, because an
+    ArrayManager silently drops out-of-order bars and the result would look
+    like a calm market.
+    """
+
+    file_path: Path = Path(path)
+    if not file_path.is_file():
+        raise FileNotFoundError(f"K线文件不存在：{path}")
+
+    bars: list[BarData] = []
+    with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        # Real exports mix separators: a comma header over space data is
+        # common. Parse each line by its own delimiter rather than trusting
+        # the sniffer on one sample, and keep datetime with its time part.
+        raw: str = handle.read()
+        rows: list[dict[str, str]] = _parse_table(raw, ["datetime", "open_price", "high_price", "low_price", "close_price", "volume"])
+
+        required = {"datetime", "open_price", "high_price", "low_price", "close_price"}
+        available: set[str] = set(rows[0].keys()) if rows else set()
+        missing: set[str] = required - available
+        if missing:
+            raise ValueError(
+                f"CSV 缺少必需列 {sorted(missing)}，需要 datetime,"
+                "open_price,high_price,low_price,close_price"
+            )
+
+
+        for row in rows:
+            dt = datetime.fromisoformat(str(row["datetime"]).strip())
+            open_price: float = float(row["open_price"])
+            high_price: float = float(row["high_price"])
+            low_price: float = float(row["low_price"])
+            close_price: float = float(row["close_price"])
+            volume: float = float(row.get("volume") or 0.0)
+
+            bars.append(
+                BarData(
+                    symbol=symbol,
+                    exchange=exchange,
+                    datetime=dt,
+                    interval=interval,
+                    volume=volume,
+                    turnover=volume * close_price,
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    gateway_name="CSV",
+                )
+            )
+
+    if not bars:
+        raise ValueError(f"CSV 中没有可用的K线：{path}")
+    return bars
+
+
+def _parse_table(raw: str, expected_columns: list[str]) -> list[dict[str, str]]:
+    """Parse a delimited export whose datetime contains a space.
+
+    The header may use commas, semicolons, tabs or spaces, and the data rows
+    may use a different one than the header. Each line is split by whichever
+    delimiter it actually contains, then folded back onto the header names.
+    """
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    header_names = _split_line(lines[0])
+    if not header_names or "open_price" not in header_names:
+        header_names = expected_columns[: len(_split_line(lines[0]))]
+
+    rows: list[dict[str, str]] = []
+    for line in lines[1:]:
+        pieces = _split_line(line)
+        if len(pieces) < len(header_names):
+            continue
+        rows.append(dict(zip(header_names, pieces[: len(header_names)], strict=True)))
+    return rows
+
+
+def _split_line(line: str) -> list[str]:
+    """Split one CSV line by its dominant delimiter, keeping datetime whole."""
+    for delimiter in (",", ";", "\t"):
+        if delimiter in line:
+            return [part.strip() for part in line.split(delimiter)]
+
+    parts = line.split()
+    if len(parts) > 6:
+        # datetime with a space: date, time, open, high, low, close[, volume]
+        return [" ".join(parts[0:2])] + parts[2:]
+    return parts
+
+
+def load_bars_from_database(
+    symbol: str,
+    exchange: Exchange,
+    interval: Interval,
+    start: datetime,
+    end: datetime,
+) -> list[BarData]:
+    """Load bars through the configured VeighNa database.
+
+    Uses whatever ``vnpy.trader.database.get_database()`` resolves to, so a
+    campaign runs against the same bars the live engine would load.
+    """
+    from vnpy.trader.database import get_database
+
+    database = get_database()
+    bars: list[BarData] = database.load_bar_data(symbol, exchange, interval, start, end)
+    if not bars:
+        raise ValueError(
+            f"数据库中没有 {symbol}.{exchange.value} 的 {interval.value} 数据"
+            f"（{start} 到 {end}），请先导入历史K线"
+        )
+    return bars
+
+
+def parse_exchange(name: str) -> Exchange:
+    """Resolve an exchange by member name, case-insensitively."""
+    try:
+        return Exchange[name.strip().upper()]
+    except KeyError as exc:
+        valid = ", ".join(member.name for member in Exchange)
+        raise ValueError(f"未知交易所 {name}，可选：{valid}") from exc
+
+
+def parse_interval(name: str) -> Interval:
+    """Resolve an interval by member name, case-insensitively."""
+    try:
+        return Interval[name.strip().upper()]
+    except KeyError as exc:
+        valid = ", ".join(member.name for member in Interval)
+        raise ValueError(f"未知周期 {name}，可选：{valid}") from exc

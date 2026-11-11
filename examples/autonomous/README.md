@@ -127,6 +127,18 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 python -m vnpy.autonomous backtest --bars 300 --seed 7
 ```
 
+合成序列只验证链路。真实决策请传入历史K线，支持两种数据源：
+
+```bash
+# 从 CSV 读取（datetime,open_price,high_price,low_price,close_price[,volume]）
+python -m vnpy.autonomous backtest --csv path/to/rb2410_1min.csv --vt-symbol rb2410.SHFE
+
+# 从已配置的 VeighNa 数据库读取
+python -m vnpy.autonomous backtest --vt-symbol rb2410.SHFE --start 2024-01-01 --end 2024-06-30
+```
+
+CSV 允许表头用逗号、数据行用空格的混合格式（真实行情导出常见），`datetime` 需带日期与时间。
+
 它驱动真实的 `CtaTemplate` 策略跑完一段 K 线，输出成交笔数、胜率、已实现/浮动盈亏、权益、最大回撤与夏普：
 
 ```

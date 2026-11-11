@@ -20,6 +20,7 @@ from vnpy.trader.constant import Direction, Exchange, Offset
 from vnpy.trader.object import TradeData
 
 from vnpy.autonomous.backtest import (
+    load_bars_from_csv,
     BacktestSettings,
     BacktestResult,
     _BacktestEngineStub,
@@ -240,3 +241,47 @@ def test_empty_bar_series_is_rejected() -> None:
     )
     with pytest.raises(ValueError):
         run_backtest(strategy, [], BacktestSettings())
+
+def test_load_bars_from_csv_accepts_comma_header_and_data(tmp_path: Path) -> None:
+    path: Path = tmp_path / "rb_comma.csv"
+    lines: list[str] = ["datetime,open_price,high_price,low_price,close_price,volume"]
+    base: datetime = datetime(2024, 1, 2, 9, 0)
+    for index in range(60):
+        price: float = 3500.0 + index * 3.0
+        moment: str = (base + timedelta(minutes=index)).isoformat(sep=" ")
+        lines.append(f"{moment},{price},{price + 5},{price - 5},{price},100")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    bars = load_bars_from_csv(str(path), "rb2410")
+    assert len(bars) == 60
+    assert bars[0].open_price == pytest.approx(3500.0)
+    assert bars[1].datetime == base + timedelta(minutes=1)
+
+
+def test_load_bars_from_csv_accepts_space_separated_rows(tmp_path: Path) -> None:
+    """Real exchange exports often pair a comma header with space rows."""
+    path: Path = tmp_path / "rb_space.csv"
+    lines: list[str] = ["datetime,open_price,high_price,low_price,close_price,volume"]
+    base: datetime = datetime(2024, 1, 2, 9, 0)
+    for index in range(60):
+        price: float = 3500.0 + index * 3.0
+        moment: str = (base + timedelta(minutes=index)).strftime("%Y-%m-%d %H:%M")
+        lines.append(f"{moment} {price} {price + 5} {price - 5} {price} 100")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    bars = load_bars_from_csv(str(path), "rb2410")
+    assert len(bars) == 60
+    assert bars[0].open_price == pytest.approx(3500.0)
+    assert bars[5].datetime == base + timedelta(minutes=5)
+
+
+def test_load_bars_from_csv_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_bars_from_csv(str(tmp_path / "absent.csv"), "rb2410")
+
+
+def test_load_bars_from_csv_rejects_bad_header(tmp_path: Path) -> None:
+    path: Path = tmp_path / "bad.csv"
+    path.write_text("foo,bar\n1,2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="缺少必需列"):
+        load_bars_from_csv(str(path), "rb2410")
