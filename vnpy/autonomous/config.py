@@ -133,6 +133,13 @@ class RuntimeConfig:
     max_restarts_per_session: int = 5
     watchdog_stall_secs: float = 300.0       # no event from gateway for this long
     auto_reconnect: bool = True
+    # When no gateway supplies ticks, derive them from the public minute-bar
+    # endpoint so a paper account has something to match orders against.
+    # Disabled by default because a config that already receives real ticks from
+    # a broker gateway must not have a second, derived feed behind its back.
+    enable_derived_feed: bool = False
+    derived_feed_poll_secs: float = 60.0
+    derived_feed_max_catchup: int = 5
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> RuntimeConfig:

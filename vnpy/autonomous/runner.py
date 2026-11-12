@@ -33,6 +33,7 @@ from vnpy.trader.logger import logger
 from vnpy.trader.object import LogData, OrderData, TradeData
 from vnpy.trader.setting import SETTINGS
 
+from .feed import DerivedFeed
 from .calendar import (
     CN_FUTURES_HOLIDAYS_2026,
     Session,
@@ -240,6 +241,8 @@ class AutonomousRunner:
         self._gateway_last_event: dict[str, datetime] = {}
         self._last_reconnect_attempt: dict[str, datetime] = {}
         self._heartbeat_at: datetime | None = None
+        self._derived_feed: Any = None
+        self._derived_feed_dir: Path | None = None
         self._status: str = "initialized"
 
     @classmethod
@@ -469,6 +472,7 @@ class AutonomousRunner:
             self._connect_gateways()
             self._add_apps()
             self._wait_for_contracts()
+            self._start_derived_feed()
             self._run_session_loop()
         except KeyboardInterrupt:
             logger.info("[autonomous] 交易子进程收到退出信号")
@@ -536,6 +540,7 @@ class AutonomousRunner:
             self.health.resume_all_due()
             self._heartbeat(now)
             self._check_watchdog(now)
+            self._poll_derived_feed()
             self._publish_strategy_snapshots()
             self._allocate_capital()
 
@@ -581,6 +586,60 @@ class AutonomousRunner:
             main_engine.connect(setting, name)
             self._gateway_last_event[name] = datetime.now()
             logger.info("[autonomous] 交易接口 %s 已连接", name)
+
+    def _start_derived_feed(self) -> None:
+        """Start the derived tick feed when the config asks for one.
+
+        A gateway that is connected and delivering ticks already fills paper
+        orders, so the feed stays off unless configured. It exists for the
+        case the runner cannot run a broker gateway at all: without it, a
+        paper order never crosses and the loop verifiably cannot trade.
+        """
+        runtime: Any = self.config.runtime
+        if not getattr(runtime, "enable_derived_feed", False):
+            return
+
+        main_engine: MainEngine = self._require_engine()
+        contracts: dict[str, Any] = {
+            c.vt_symbol: c for c in main_engine.get_all_contracts()
+        }
+        if not contracts:
+            logger.warning("[emfeed] 无合约，跳过派生行情")
+            return
+
+        cursor_dir: Path = self._resolve_derived_feed_dir()
+        self._derived_feed_dir = cursor_dir
+        feed = DerivedFeed(
+            self._require_event_engine(),
+            contracts,
+            cursor_dir,
+            poll_secs=getattr(runtime, "derived_feed_poll_secs", 60.0),
+            max_catchup=int(getattr(runtime, "derived_feed_max_catchup", 5)),
+        )
+        self._derived_feed = feed
+        feed.poll_once()
+        logger.info(
+            "[emfeed] 派生行情已启动，%d 个合约，已发 %d 笔 tick",
+            len(contracts),
+            feed.ticks_emitted,
+        )
+
+    def _poll_derived_feed(self) -> None:
+        """Poll the derived feed on the session loop's cadence."""
+        feed: Any = self._derived_feed
+        if feed is None:
+            return
+        try:
+            ticks: list[Any] = feed.poll_once()
+        except Exception as exc:  # noqa: BLE001 - never kill the loop
+            logger.warning("[emfeed] 拉取失败：%s", exc)
+            return
+        if ticks:
+            logger.info("[emfeed] 新增 %d 笔 tick", len(ticks))
+
+    def _resolve_derived_feed_dir(self) -> Path:
+        """Keep the cursor next to the state file so restarts resume."""
+        return self.state_path.parent
 
     def _add_apps(self) -> None:
         """Load every configured app and collect strategy engines."""
