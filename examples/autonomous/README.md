@@ -237,6 +237,7 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
 
 - 通过 `variables` 持续上报 `realized_pnl` 与 `equity`，`CtaStatsAdapter` 据此驱动策略健康熔断与资金分配；没有上报的策略，这两类规则对其保持关闭。
 - 内置 `max_position` 仓位自检与 ATR bar 止损，单策略不会超出风控守卫生成器的预期边界。
+- ATR 止损按「bar 内触价」判定，不是看收盘价：多头在 `avg_cost - stop_atr x ATR`，当根 K 线的最低价触到即离场，空头对称看最高价。一根 bar 里下穿止损又收回，收盘价判据会漏掉它，回测因此少记一次真实回撤。成交价取触发价与当根开盘价中更不利的一侧（买入 `max`、卖出 `min`），与 `vnpy_ctastrategy` 官方回测器 `cross_stop_order` 的挂单语义一致，跳空穿过止损不会以优于开盘价的价格成交。
 - 已覆盖「预热 → 金叉开仓 → 成交记账 → ATR 止损平仓 → 盈亏变量」全链路的真实引擎测试。
 
 使用方式：

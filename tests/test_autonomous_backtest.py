@@ -9,6 +9,7 @@ looked like an edge.
 """
 
 import importlib.util
+from typing import Any
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import pytest
 
 from vnpy.trader.constant import Direction, Exchange, Offset
 from vnpy.trader.object import BarData, TradeData
+from vnpy.trader.utility import ArrayManager, round_to
 
 from vnpy.autonomous.backtest import (
     load_bars_from_csv,
@@ -495,3 +497,125 @@ def test_trend_strategy_scales_into_a_running_trend() -> None:
     assert result.open_position == 3
     # Multiple adds mean more than one fill per trend leg.
     assert result.trade_count > 1
+
+
+def _long_position_in_a_rally() -> Any:
+    """Replay a calm rally so the strategy holds a live long position.
+
+    The stop tests need the engine, indicators and cost basis in the state a
+    live strategy actually runs in, which only a real replay produces.
+    """
+    strategy = load_strategy_class()(
+        cta_engine=None,
+        strategy_name="bt",
+        vt_symbol="rb9999.SHFE",
+        setting={
+            "fast_window": 3,
+            "slow_window": 5,
+            "atr_window": 10,
+            "stop_atr": 1.0,
+            "fixed_size": 1,
+            "max_position": 2,
+        },
+    )
+
+    base = datetime(2024, 1, 2, 9, 0)
+
+    def bar(minute: int, open_price: float, high: float, low: float, close: float) -> BarData:
+        return build_bar(base + timedelta(minutes=minute), open_price, high, low, close)
+
+    warmup: list[BarData] = [bar(i, 100.0, 101.0, 99.0, 100.0) for i in range(25)]
+    rally: list[BarData] = []
+    for index in range(6):
+        close = 100.0 + (index + 1) * 0.5
+        rally.append(bar(25 + index, 100.0, close + 0.3, 99.7, close))
+
+    run_backtest(strategy, warmup + rally, BacktestSettings())
+    assert strategy.pos > 0
+    return strategy
+
+
+def _armed_stop(strategy: Any, probe_bar: BarData) -> float:
+    """The stop the strategy arms when it sees ``probe_bar``.
+
+    ``on_bar`` folds the bar into the ArrayManager before it prices the stop,
+    so the level runs off this bar's own ATR. Clone the live manager so the
+    fixture measures the same input without disturbing the strategy's state.
+    """
+    probe: ArrayManager = ArrayManager(strategy.am.size)
+    window: int = int(strategy.am.size)
+    # The manager keeps a rolling window, so the most recent bars sit at the
+    # right edge; ``count`` is the lifetime total, not the live length.
+    for offset in range(window):
+        probe.update_bar(
+            build_bar(
+                probe_bar.datetime - timedelta(minutes=window - offset),
+                strategy.am.open_array[offset],
+                strategy.am.high_array[offset],
+                strategy.am.low_array[offset],
+                strategy.am.close_array[offset],
+            )
+        )
+    probe.update_bar(probe_bar)
+    atr_value: float = float(probe.atr(strategy.atr_window, array=True)[-1])
+    return float(strategy.avg_cost) - float(strategy.stop_atr) * atr_value
+
+
+def test_atr_stop_fills_when_the_bar_trades_through_it() -> None:
+    """A stop is a resting order, not a close-price comparison.
+
+    Judging on the close alone lets a bar that dipped through the stop and
+    recovered report no stop at all, so the backtest books a smaller drawdown
+    than the strategy can actually produce. The fill must land on the worse
+    side of the stop and the open, like a real stop order.
+    """
+    strategy = _long_position_in_a_rally()
+    engine: _BacktestEngineStub = strategy.cta_engine
+    engine.pending.clear()
+
+    # The stop is crossed inside the bar, yet the bar closes back above it.
+    break_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 31), 97.0, 103.0, 96.0, 102.0
+    )
+    # on_bar() folds the bar into the ArrayManager before it prices the stop,
+    # so the armed stop runs off this bar's own ATR.
+    stop_price: float = _armed_stop(strategy, break_bar)
+    assert break_bar.low_price <= stop_price < break_bar.close_price
+
+    strategy.on_bar(break_bar)
+
+    # The stop fired, so the whole position is queued as a closing order.
+    assert len(engine.pending) == 1
+    queued_direction, queued_offset, queued_price, queued_volume = engine.pending[0]
+    assert queued_direction is Direction.SHORT
+    assert queued_offset is Offset.CLOSE
+    assert queued_volume == strategy.pos
+    # A resting stop fills at the worse of the stop and the open, so a bar
+    # that gaps through the stop never books a price better than the open.
+    # The queue rounds that price onto the contract tick.
+    armed: float = max(stop_price, break_bar.open_price)
+    assert queued_price == pytest.approx(round_to(armed, 0.2))
+    assert queued_price >= break_bar.open_price
+
+
+def test_atr_stop_stays_quiet_when_the_bar_misses_it() -> None:
+    """A bar that only closes low leaves the stop alone.
+
+    The stop prices the bar's range, not its close, so a slow grind down that
+    never trades through the level must not be stopped out retroactively.
+    """
+    strategy = _long_position_in_a_rally()
+    engine: _BacktestEngineStub = strategy.cta_engine
+    engine.pending.clear()
+
+    # Hold the close near the trend so the moving averages stay ordered the
+    # same way: this bar must speak only to the stop, not to a cross.
+    soft_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 31), 99.6, 100.4, 98.2, 99.8
+    )
+    stop_price: float = _armed_stop(strategy, soft_bar)
+    assert soft_bar.low_price > stop_price
+    assert strategy.fast_ma0 > strategy.slow_ma0
+
+    strategy.on_bar(soft_bar)
+    assert engine.pending == []

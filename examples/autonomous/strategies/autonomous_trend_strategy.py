@@ -122,14 +122,20 @@ class AutonomousTrendStrategy(CtaTemplate):
         )
 
         # ATR bar stop first: protecting capital outranks new signals.
+        # A live stop is a resting order: it fills when the bar trades
+        # through the stop, not when the bar closes below it. Judging on the
+        # close alone skips every stop that recovered within the bar, which
+        # hides exactly the drawdowns the stop exists to cut.
         if self.pos > 0 and self.avg_cost > 0:
-            if bar.close_price <= self.avg_cost - self.stop_atr * self.atr_value:
-                self.sell(bar.close_price, self.pos)
+            stop_price: float = self.avg_cost - self.stop_atr * self.atr_value
+            if bar.low_price <= stop_price:
+                self.sell(max(stop_price, bar.open_price), self.pos)
                 self.put_event()
                 return
         if self.pos < 0 and self.avg_cost > 0:
-            if bar.close_price >= self.avg_cost + self.stop_atr * self.atr_value:
-                self.cover(bar.close_price, -self.pos)
+            stop_price = self.avg_cost + self.stop_atr * self.atr_value
+            if bar.high_price >= stop_price:
+                self.cover(min(stop_price, bar.open_price), -self.pos)
                 self.put_event()
                 return
 
