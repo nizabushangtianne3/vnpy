@@ -97,6 +97,26 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
     backtest_parser.add_argument("--size", type=float, default=10, help="合约乘数")
     backtest_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
+    portfolio_parser: argparse.ArgumentParser = subparsers.add_parser(
+        "portfolio", help="多品种组合回测与样本外验证"
+    )
+    _add_config_argument(portfolio_parser)
+    portfolio_parser.add_argument("--strategy", default="AutonomousTrendStrategy", help="策略类名")
+    portfolio_parser.add_argument("--strategy-file", default="", help="策略文件，默认发自 examples/autonomous/strategies")
+    portfolio_parser.add_argument(
+        "--markets",
+        required=True,
+        help="品种清单，逗号分隔 name=csv 对，如 m=path1.csv,rb=path2.csv",
+    )
+    portfolio_parser.add_argument("--grid", required=True, help="参数网格，如 fast_window=5,10;slow_window=20,40")
+    portfolio_parser.add_argument("--top", type=int, default=10, help="输出前 N 个结果")
+    portfolio_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
+    portfolio_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
+    portfolio_parser.add_argument("--size", type=float, default=10, help="合约乘数")
+    portfolio_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
+    portfolio_parser.add_argument("--train-bars", type=int, default=0, help="walk-forward 训练段长度")
+    portfolio_parser.add_argument("--test-bars", type=int, default=0, help="walk-forward 测试段长度")
+    portfolio_parser.add_argument("--output", default="", help="把回测/优化结果写入 JSON 文件")
     sessions_parser: argparse.ArgumentParser = subparsers.add_parser(
         "sessions", help="打印后续交易时段"
     )
@@ -357,6 +377,238 @@ def _selected_train_row(train_rows: list[dict], best_config: dict) -> dict:
         if row["params"] == best_config:
             return row
     return train_rows[0]
+
+
+def _load_strategy_class(strategy_file: str, strategy_name: str) -> type:
+    """Load a strategy class from a file without importing the whole package."""
+    import importlib.util
+
+    path: Path = (
+        Path(strategy_file)
+        if strategy_file
+        else (
+            Path(__file__).resolve().parents[2]
+            / "examples"
+            / "autonomous"
+            / "strategies"
+            / "autonomous_trend_strategy.py"
+        )
+    )
+    spec = importlib.util.spec_from_file_location("autonomous_strategy", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"无法加载策略文件 {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        strategy_class: type = getattr(module, strategy_name)
+    except AttributeError as exc:
+        raise ValueError(f"{strategy_name} 不在 {path} 中") from exc
+    return strategy_class
+
+
+def _parse_markets(raw: str) -> dict[str, str]:
+    """Parse ``name=csv,name=csv`` into a mapping of symbol name to file path."""
+    markets: dict[str, str] = {}
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ValueError(f"--markets 项缺少名称：{chunk}")
+        name, path = chunk.split("=", 1)
+        name = name.strip()
+        if not name or not path.strip():
+            raise ValueError(f"--markets 项格式错误：{chunk}")
+        markets[name] = path.strip()
+    if not markets:
+        raise ValueError("--markets 至少需要一个品种")
+    return markets
+
+
+def command_portfolio(args: argparse.Namespace) -> int:
+    """Run one strategy per instrument, combine, and optionally validate."""
+    from typing import Any
+
+    from collections.abc import Iterable, Mapping
+
+    from vnpy.trader.object import BarData
+
+    from .backtest import (
+        PortfolioResult,
+        BacktestSettings,
+        load_bars_from_csv,
+        run_portfolio_backtest,
+    )
+    from vnpy.trader.constant import Exchange, Interval
+
+    markets: dict[str, str] = _parse_markets(args.markets)
+    strategy_class: type = _load_strategy_class(args.strategy_file, args.strategy)
+
+    try:
+        grid: list[dict[str, int | float]] = _parse_grid(args.grid)
+    except ValueError as exc:
+        print("错误：" + str(exc))
+        return 2
+
+    bars_by_name: dict[str, list[BarData]] = {}
+    for name, csv in markets.items():
+        try:
+            bars_by_name[name] = load_bars_from_csv(
+                csv, name, exchange=Exchange.SHFE, interval=Interval.DAILY
+            )
+        except (OSError, ValueError) as exc:
+            print(f"错误：{name} 数据加载失败：{exc}")
+            return 2
+        print(f"数据来源：CSV {csv}（{name}），共 {len(bars_by_name[name])} 根K线")
+
+    settings: BacktestSettings = BacktestSettings(
+        slippage=args.slippage,
+        rate=args.rate,
+        size=args.size,
+        capital=args.capital,
+    )
+
+    def _run_one(
+        config: dict[str, int | float],
+        slices: Mapping[str, Iterable[BarData]],
+    ) -> PortfolioResult:
+        strategies: dict[str, Any] = {
+            name: strategy_class(
+                cta_engine=None,
+                strategy_name=name,
+                vt_symbol=f"{name}9999.SHFE",
+                setting=dict(config),
+            )
+            for name in slices
+        }
+        return run_portfolio_backtest(strategies, slices, settings)
+
+    use_walk_forward: bool = args.train_bars > 0 and args.test_bars > 0
+    if (args.train_bars > 0) != (args.test_bars > 0):
+        print("错误：--train-bars 与 --test-bars 必须同时设置")
+        return 2
+
+    if not use_walk_forward:
+        rows: list[dict] = []
+        for config in grid:
+            result: PortfolioResult = _run_one(config, bars_by_name)
+            rows.append(
+                {
+                    "params": dict(config),
+                    "total_pnl": result.total_pnl,
+                    "sharpe": result.sharpe,
+                    "max_drawdown": result.max_drawdown,
+                    "trade_count": result.trade_count,
+                    "leg_pnls": result.leg_pnls(),
+                }
+            )
+        rows.sort(key=lambda item: item["sharpe"], reverse=True)
+        print(f"{'排名':>4} {'sharpe':>8} {'total_pnl':>12} {'max_dd':>10} {'trades':>8}  params")
+        for rank, row in enumerate(rows[: max(args.top, 1)], start=1):
+            params_text: str = ",".join(f"{k}={v}" for k, v in row["params"].items())
+            print(
+                f"{rank:>4} {row['sharpe']:>8.3f} {row['total_pnl']:>12.2f} "
+                f"{row['max_drawdown']:>10.2f} {row['trade_count']:>8}  {params_text}"
+            )
+        if args.output:
+            output_path: Path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps({"results": rows}, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"结果已写入：{output_path}")
+        return 0 if rows and rows[0]["total_pnl"] > 0 else 1
+
+    min_bars: int = min(len(bars) for bars in bars_by_name.values())
+    if min_bars < args.train_bars + args.test_bars:
+        print(
+            f"错误：K线不足以组成一个完整的 walk-forward 折叠，"
+            f"最短品种只有 {min_bars} 根"
+        )
+        return 2
+
+    fold_results: list[dict] = []
+    window_start: int = 0
+    while window_start + args.train_bars + args.test_bars <= min_bars:
+        train_slices: dict[str, list] = {
+            name: bars[window_start : window_start + args.train_bars]
+            for name, bars in bars_by_name.items()
+        }
+        test_slices: dict[str, list] = {
+            name: bars[
+                window_start + args.train_bars : window_start
+                + args.train_bars
+                + args.test_bars
+            ]
+            for name, bars in bars_by_name.items()
+        }
+        train_rows: list[dict] = []
+        for config in grid:
+            train_result: PortfolioResult = _run_one(config, train_slices)
+            train_rows.append(
+                {
+                    "params": dict(config),
+                    "total_pnl": train_result.total_pnl,
+                    "sharpe": train_result.sharpe,
+                    # A portfolio run has no per-instrument profit factor, and
+                    # inventing one would let a fabricated tie-breaker pick
+                    # the parameters. ``_pick_best_params`` tolerates rows
+                    # without the key and falls back to sharpe only.
+                }
+            )
+        best_config: dict = _pick_best_params(train_rows)
+        out_of_sample: PortfolioResult = _run_one(best_config, test_slices)
+        fold_results.append(
+            {
+                "fold": len(fold_results) + 1,
+                "best_params": best_config,
+                "test_pnl": out_of_sample.total_pnl,
+                "test_sharpe": out_of_sample.sharpe,
+                "leg_pnls": out_of_sample.leg_pnls(),
+            }
+        )
+        window_start += args.test_bars
+
+    print(f"组合 walk-forward 验证：训练 {args.train_bars} 根，测试 {args.test_bars} 根")
+    print(f"{'fold':>5} {'test_sharpe':>12} {'test_pnl':>12}  params")
+    for row in fold_results:
+        params_text = ",".join(f"{k}={v}" for k, v in row["best_params"].items())
+        print(
+            f"{row['fold']:>5} {row['test_sharpe']:>12.3f} "
+            f"{row['test_pnl']:>12.2f}  {params_text}"
+        )
+    aggregate_test: float = sum(r["test_pnl"] for r in fold_results)
+    aggregate_test_sharpe: float = (
+        sum(r["test_sharpe"] for r in fold_results) / len(fold_results)
+    )
+    print(f"\n样本外合计 pnl={aggregate_test:.2f}, avg_sharpe={aggregate_test_sharpe:.3f}")
+    verdict: int
+    if aggregate_test <= 0:
+        print("结论：组合样本外未取得正期望。")
+        verdict = 1
+    else:
+        print("结论：组合样本外取得正期望。")
+        verdict = 0
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "markets": list(markets),
+                    "train_bars": args.train_bars,
+                    "test_bars": args.test_bars,
+                    "folds": fold_results,
+                    "aggregate_test_pnl": aggregate_test,
+                    "aggregate_test_sharpe": aggregate_test_sharpe,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"结果已写入：{output_path}")
+    return verdict
 
 
 def command_optimize(args: argparse.Namespace) -> int:
@@ -740,6 +992,7 @@ def main(argv: list[str] | None = None) -> int:
         "sessions": command_sessions,
         "backtest": command_backtest,
         "optimize": command_optimize,
+        "portfolio": command_portfolio,
         "status": command_status,
     }
     handler = handlers[args.command]

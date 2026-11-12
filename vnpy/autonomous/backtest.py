@@ -23,7 +23,7 @@ purely because it saw prices that were not yet knowable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -87,6 +87,8 @@ class BacktestResult:
     max_drawdown: float = 0.0
     sharpe: float = 0.0
     profit_factor: float = 0.0
+    equity_curve: list[float] = field(default_factory=list)
+    curve_dates: list[datetime] = field(default_factory=list)
 
     def summary(self) -> dict[str, float | int]:
         """Flat mapping for state files, notifications and assertions."""
@@ -103,6 +105,7 @@ class BacktestResult:
             "max_drawdown": self.max_drawdown,
             "sharpe": self.sharpe,
             "profit_factor": self.profit_factor,
+            "curve_points": len(self.equity_curve),
         }
 
 
@@ -376,6 +379,8 @@ def _build_result(
         max_drawdown=max_drawdown,
         sharpe=annual_sharpe(equity_curve, timestamps),
         profit_factor=profit_factor(engine.trades, engine.trade_costs),
+        equity_curve=list(equity_curve),
+        curve_dates=list(timestamps or []),
     )
 
 def _round_trip_pnls(
@@ -565,6 +570,119 @@ def build_bar(
 
 # Bar sources. A campaign is only as good as its data, so the two realistic
 # paths are supported instead of only the synthetic generator.
+
+
+@dataclass
+class PortfolioResult:
+    """Combined statistics of several strategies run side by side.
+
+    A single instrument's walk-forward result answers whether one edge
+    exists. It cannot answer whether the collection survives, because a
+    curve made of uncorrelated legs has a lower drawdown than the worst leg
+    alone, and that difference is the argument for holding several
+    instruments. ``legs`` keeps the individual runs so the total can be
+    attributed, which matters because a combined pnl carried entirely by one
+    leg is not diversification.
+    """
+
+    legs: dict[str, BacktestResult] = field(default_factory=dict)
+    dates: list[datetime] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=list)
+    total_pnl: float = 0.0
+    max_drawdown: float = 0.0
+    sharpe: float = 0.0
+    trade_count: int = 0
+
+    def leg_pnls(self) -> dict[str, float]:
+        """Per-instrument total pnl, for attributing the combined figure."""
+        return {name: result.total_pnl for name, result in self.legs.items()}
+
+    def summary(self) -> dict[str, float | int | dict[str, float]]:
+        """Flat mapping for JSON output and assertions."""
+        return {
+            "total_pnl": self.total_pnl,
+            "max_drawdown": self.max_drawdown,
+            "sharpe": self.sharpe,
+            "trade_count": self.trade_count,
+            "legs": len(self.legs),
+            "leg_pnls": self.leg_pnls(),
+        }
+
+
+def run_portfolio_backtest(
+    strategies: dict[str, Any],
+    bars_by_symbol: Mapping[str, Iterable[BarData]],
+    settings: BacktestSettings | None = None,
+) -> PortfolioResult:
+    """Run one strategy per instrument and combine the equity curves.
+
+    Each leg is independent: it replays its own bar series with its own
+    position and cost. Combining them is bookkeeping, so the combined curve
+    sums the per-bar pnl of every leg.
+
+    Alignment matters more than it looks. Instruments trade different
+    calendars and different daily bar counts, so the combined curve unions
+    the dates instead of zipping lists by index: a date one leg did not trade
+    is a flat day for that leg, not the end of the series. Walking every date
+    any leg saw keeps the combined curve honest about the years it covers.
+    """
+    if settings is None:
+        settings = BacktestSettings()
+
+    per_date_pnl: dict[datetime, float] = {}
+    union_dates: set[datetime] = set()
+    legs: dict[str, BacktestResult] = {}
+
+    for name, strategy in strategies.items():
+        bars: list[BarData] = list(bars_by_symbol[name])
+        if not bars:
+            # An instrument without bars contributes no pnl. Sending an empty
+            # series into the single-strategy path would fail a precondition
+            # that belongs to a caller who expects to replay something.
+            continue
+        result: BacktestResult = run_backtest(strategy, bars, settings)
+        legs[name] = result
+        union_dates.update(result.curve_dates)
+        # The curve starts at capital with one point per bar, so the pnl a bar
+        # contributed is its difference against the previous point.
+        # Differencing lets two legs sharing a timestamp add their increments
+        # rather than adding two running totals.
+        running: float = 0.0
+        for date, value in zip(
+            result.curve_dates, result.equity_curve, strict=False
+        ):
+            current: float = value - settings.capital
+            delta: float = current - running
+            if delta:
+                per_date_pnl[date] = per_date_pnl.get(date, 0.0) + delta
+            running = current
+
+    dates: list[datetime] = sorted(union_dates)
+    equity: float = settings.capital
+    equity_curve: list[float] = [equity]
+    peak: float = equity
+    max_drawdown: float = 0.0
+    for date in dates:
+        equity += per_date_pnl.get(date, 0.0)
+        equity_curve.append(equity)
+        peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, peak - equity)
+
+    total_pnl: float = equity - settings.capital
+    trade_count: int = sum(result.trade_count for result in legs.values())
+    # ``annual_sharpe`` reads one timestamp per return interval while the
+    # curve carries one extra point for its starting capital, so the series
+    # is seeded with the first date.
+    sharpe_dates: list[datetime] = [dates[0], *dates] if dates else []
+    return PortfolioResult(
+        legs=legs,
+        dates=dates,
+        equity_curve=equity_curve,
+        total_pnl=total_pnl,
+        max_drawdown=max_drawdown,
+        sharpe=annual_sharpe(equity_curve, sharpe_dates),
+        trade_count=trade_count,
+    )
 
 
 def load_bars_from_csv(

@@ -171,6 +171,22 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
 
 `--slippage` / `--rate` / `--size` / `--capital` 分别控制成交成本与资金基数，其中 `--size` 支持非整数合约乘数（如 300 股 / 手 或指数点位折算的品种）。这些参数同样适用于 `backtest` 子命令。
 
+多个品种跑同一套策略、把盈亏合成一条组合曲线，用 `portfolio` 子命令：
+
+```bash
+python -m vnpy.autonomous portfolio \
+    --markets "m=path/to/m_daily.csv,rb=path/to/rbm_daily.csv" \
+    --grid "fast_window=5,10;slow_window=40,60;stop_atr=2.0,3.0;trail_stop=0.0,2.0,4.0" \
+    --size 10 --slippage 1 --train-bars 1400 --test-bars 700 \
+    --output portfolio_result.json
+```
+
+`--markets` 用 `名称=CSV路径` 声明品种，组合层面的 walk-forward 每折在训练段选一组参数，再用同一组参数跑所有品种的样本外段，输出的 JSON 含每折各品种的贡献（`leg_pnls`）——看合计会把「一个品种扛全部」误读成组合优势，所以每折的拆分必须看。
+
+组合曲线的日期按各品种的**并集**对齐，不是按下标配对：两个品种交易日历不同，某个品种没有 bar 的日期对它就是持平日，不是序列结束。各品种独立跑自己的持仓与成本，组合只是账面相加。
+
+真实数据实测（豆粕 4843 根 + 螺纹 4295 根，训练 1400 / 样本外 700、24 组参数）：组合样本外合计 +285972.71、3/4 折盈利、平均夏普 0.536；同期单品种为豆粕 +320510.95（4/4 折）、螺纹 -53263.91（2/4 折）。拆开每折看，螺纹四折合计 -15915.86 几乎全线亏损——**分散化在当前参考策略上只降低了回撤，没有提高盈亏**，组合的正期望来自豆粕单腿。换品种、换策略时请先单独跑过 `backtest` / `optimize`，再用组合验证分散，不要把组合当成让亏损品种起死回生的手段。
+
 它驱动真实的 `CtaTemplate` 策略跑完一段 K 线，输出成交笔数、胜率、已实现/浮动盈亏、权益、最大回撤与夏普：
 
 ```

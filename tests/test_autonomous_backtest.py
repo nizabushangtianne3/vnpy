@@ -31,6 +31,7 @@ from vnpy.autonomous.backtest import (
     build_bar,
     profit_factor,
     run_backtest,
+    run_portfolio_backtest,
 )
 
 
@@ -865,3 +866,137 @@ def test_zero_trail_keeps_the_static_stop_level() -> None:
     )
     # With the trail disabled the extreme is tracked but never used.
     assert strategy.pos_extreme > static_stop
+
+
+def _portfolio_legs(
+    count: int = 240,
+    offset: float = 0.0,
+) -> dict[str, Any]:
+    """Two independent strategies over two shifted bar series."""
+    strategy_class: type = load_strategy_class()
+    legs: dict[str, Any] = {}
+    bars: dict[str, list] = {}
+    for index, name in enumerate(("a", "b")):
+        legs[name] = strategy_class(
+            cta_engine=None,
+            strategy_name=name,
+            vt_symbol=f"{name}9999.SHFE",
+            setting={
+                "fast_window": 5,
+                "slow_window": 20,
+                "atr_window": 10,
+                "stop_atr": 2.0,
+                "fixed_size": 1,
+                "max_position": 5,
+                "trail_stop": 2.0,
+            },
+        )
+        bars[name] = synthetic_bars(count=count, seed=7 + index)
+        if offset:
+            for bar in bars[name]:
+                bar.datetime += timedelta(days=offset * (index + 1))
+                bar.close_price *= 1.0 + 0.01 * offset * (index + 1)
+    return legs, bars
+
+
+def test_portfolio_backtest_sums_every_leg() -> None:
+    """The combined pnl is the sum of the legs, with no leg dropped."""
+    legs, bars = _portfolio_legs()
+    settings = BacktestSettings(capital=100000.0)
+    result = run_portfolio_backtest(legs, bars, settings)
+
+    expected: float = sum(leg.total_pnl for leg in result.legs.values())
+    assert result.total_pnl == pytest.approx(expected)
+    assert set(result.legs) == {"a", "b"}
+    assert result.trade_count == sum(leg.trade_count for leg in result.legs.values())
+    # Every leg reports its own curve, so the sum can be attributed later.
+    for leg in result.legs.values():
+        assert leg.equity_curve
+        assert len(leg.curve_dates) == len(leg.equity_curve)
+
+
+def test_portfolio_backtest_aligns_curves_on_timestamp() -> None:
+    """Legs on different calendars union their dates, not overwrite them."""
+    # Real instruments trade different calendars: one leg has a session the
+    # other does not. A union keeps both contributions, while keying the
+    # combination by list index would let one leg silently drop the other's
+    # pnl on every shared date.
+    strategy_class: type = load_strategy_class()
+    setting: dict[str, float] = {
+        "fast_window": 5,
+        "slow_window": 20,
+        "atr_window": 10,
+        "stop_atr": 2.0,
+        "fixed_size": 1,
+        "max_position": 5,
+        "trail_stop": 2.0,
+    }
+    legs: dict[str, Any] = {}
+    bars: dict[str, list] = {}
+    base: datetime = datetime(2024, 1, 2, 9, 0)
+    for index, name in enumerate(("a", "b")):
+        legs[name] = strategy_class(
+            cta_engine=None,
+            strategy_name=name,
+            vt_symbol=f"{name}9999.SHFE",
+            setting=dict(setting),
+        )
+        # Leg "a" runs every hour, leg "b" every two hours and starts an hour
+        # later, so most dates are exclusive to one of them.
+        series = synthetic_bars(count=200, seed=7 + index)
+        bars[name] = [
+            build_bar(
+                base + timedelta(hours=2 * index + hour),
+                bar.open_price,
+                bar.high_price,
+                bar.low_price,
+                bar.close_price,
+            )
+            for hour, bar in enumerate(series)
+        ]
+        # Drop a few bars from "b" so its calendar stays genuinely different.
+        if name == "b":
+            bars[name] = bars[name][::2]
+
+    settings = BacktestSettings(capital=100000.0)
+    result = run_portfolio_backtest(legs, bars, settings)
+
+    seen: set[datetime] = set()
+    for leg in result.legs.values():
+        seen.update(leg.curve_dates)
+    assert set(result.dates) == seen
+    # One extra curve point for the starting capital.
+    assert len(result.equity_curve) == len(result.dates) + 1
+    assert result.equity_curve[0] == pytest.approx(settings.capital)
+    assert len(result.dates) > 0
+    # Both legs must have contributed: neither is fully inside the other.
+    assert set(result.legs["a"].curve_dates) - set(result.legs["b"].curve_dates)
+    assert set(result.legs["b"].curve_dates) - set(result.legs["a"].curve_dates)
+
+
+def test_portfolio_drawdown_never_exceeds_the_worst_leg() -> None:
+    """Diversification may shrink a drawdown, it cannot invent one."""
+    legs, bars = _portfolio_legs()
+    settings = BacktestSettings(capital=100000.0)
+    result = run_portfolio_backtest(legs, bars, settings)
+
+    worst_leg: float = max(leg.max_drawdown for leg in result.legs.values())
+    assert result.max_drawdown <= worst_leg + 1e-9
+    assert result.max_drawdown >= 0.0
+
+
+def test_portfolio_backtest_survives_an_empty_leg() -> None:
+    """A leg with no bars contributes nothing and breaks nothing."""
+    strategy_class: type = load_strategy_class()
+    legs: dict[str, Any] = {
+        "a": strategy_class(
+            cta_engine=None,
+            strategy_name="a",
+            vt_symbol="a9999.SHFE",
+            setting={"fast_window": 5, "slow_window": 20},
+        ),
+    }
+    bars: dict[str, list] = {"a": []}
+    result = run_portfolio_backtest(legs, bars, BacktestSettings(capital=100000.0))
+    assert result.total_pnl == pytest.approx(0.0)
+    assert result.equity_curve == [100000.0]
