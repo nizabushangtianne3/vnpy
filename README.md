@@ -92,6 +92,7 @@ vnpy.alpha模块的设计理念受到[Qlib](https://github.com/microsoft/qlib)�
 ```bash
 python -m vnpy.autonomous check   # 校验配置与日历
 python -m vnpy.autonomous run     # 启动自主交易守护进程
+python -m vnpy.autonomous quotes  # 拉取 A 股实时行情，核对已装配标的
 ```
 
 详细文档见 [自主交易运行器](./docs/community/autonomous/index.md)，配置示例见 [examples/autonomous](./examples/autonomous)。

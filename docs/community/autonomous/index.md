@@ -12,6 +12,7 @@
 | [health](./health.md) | 策略健康熔断：连续亏损/当日亏损/错误率，冷却自愈 |
 | [portfolio](./portfolio.md) | 资金分配：等权与逆波动率，水填法应用权重上限 |
 | [runner](./runner.md) | 父级守护 + 交易子进程编排，状态文件与心跳 |
+| [market](./market.md) | A 股实时行情：拉取快照核对已装配标的 |
 
 从仿真到实盘的推进节奏见 [晋升手册](./promotion.md)。
 
@@ -20,6 +21,7 @@
 ```bash
 python -m vnpy.autonomous check   --config .vntrader/autonomous.json
 python -m vnpy.autonomous run     --config .vntrader/autonomous.json
+python -m vnpy.autonomous quotes --config .vntrader/autonomous.json
 ```
 
 完整字段说明见 [examples/autonomous/README.md](https://github.com/vnpy/vnpy/blob/master/examples/autonomous/README.md)。

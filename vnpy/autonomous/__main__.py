@@ -13,11 +13,13 @@ import argparse
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from .calendar import PROFILE_NAMES
 from .config import default_config_path, load_config, validate_config
+from .market import fetch_quotes
 from .runner import (
     APP_REGISTRY,
     GATEWAY_REGISTRY,
@@ -149,6 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_argument(sessions_parser)
     sessions_parser.add_argument("--count", type=int, default=5, help="展示时段数量")
 
+    quotes_parser: argparse.ArgumentParser = subparsers.add_parser(
+        "quotes", help="拉取 A 股实时行情快照，核对已装配策略的标的"
+    )
+    _add_config_argument(quotes_parser)
+    quotes_parser.add_argument(
+        "--symbol",
+        action="append",
+        default=[],
+        help="股票代码，可重复；不提供时从配置的 strategies 自动读取",
+    )
+    quotes_parser.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     return parser
 
 
@@ -194,6 +208,55 @@ def command_sessions(args: argparse.Namespace) -> int:
         next_open: datetime = runner.calendar.next_open(current)
         print(f"开盘时间：{next_open}")
         current = next_open
+    return 0
+
+
+def _strategies_from_config(config_path: str) -> list[str]:
+    """Read the vt_symbols a config provisions, for quote lookups."""
+    runner: AutonomousRunner = _load_runner(config_path)
+    cta: dict = runner.config.app_settings.get("CtaStrategy", {})
+    strategies: object = cta.get("strategies")
+    if not isinstance(strategies, list):
+        return []
+    symbols: list[str] = []
+    for entry in strategies:
+        if isinstance(entry, dict):
+            vt_symbol: str = str(entry.get("vt_symbol", ""))
+            code: str = vt_symbol.split(".")[0]
+            if code and code not in symbols:
+                symbols.append(code)
+    return symbols
+
+
+def command_quotes(args: argparse.Namespace) -> int:
+    """拉取给定或配置装配标的的 A 股实时行情。"""
+    if args.symbol:
+        symbols: list[str] = [str(s) for s in args.symbol]
+    else:
+        symbols = _strategies_from_config(args.config)
+        if not symbols:
+            print("错误：未提供 --symbol，且配置中没有已装配的策略标的")
+            return 2
+
+    quotes, errors = fetch_quotes(symbols)
+    if args.json:
+        payload: dict = {
+            "quotes": [asdict(q) for q in quotes],
+            "errors": [asdict(e) for e in errors],
+        }
+        print(json.dumps(payload, ensure_ascii=False, default=str))
+        return 0
+
+    for quote in quotes:
+        print(
+            f"{quote.symbol:<8} {quote.name:<6}"
+            f" latest={quote.last_price:>10.2f}"
+            f" prev_close={quote.prev_close:>10.2f}"
+            f" chg={quote.change_pct:>7.2f}%"
+            f" updated={quote.updated_at}"
+        )
+    for error in errors:
+        print(f"{error.symbol:<8} [无行情] {error.message}")
     return 0
 
 
@@ -1127,6 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
         "run": command_run,
         "check": command_check,
         "sessions": command_sessions,
+        "quotes": command_quotes,
         "backtest": command_backtest,
         "optimize": command_optimize,
         "portfolio": command_portfolio,
