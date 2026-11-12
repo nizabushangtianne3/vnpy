@@ -314,4 +314,10 @@ CtaEngine 初始化时扫描 `.vntrader/strategies/` 加载该类，然后在 `a
 python -m vnpy.autonomous promote --run "m9999.DCE=m_wf.json" --run "rb9999.SHFE=rb_wf.json"
 ```
 
-只输出三种判定：`promote`（样本外盈亏为正、样本外夏普不低于样本内一半、盈利折叠过半）、`watch`（通过门槛但组合只有一个品种盈利，其余品种未提供分散化贡献）、`retire`（任一门槛未过，逐条列出失败原因）。门槛在配置的 `promotion` 段调整（`min_out_pnl` / `min_out_sharpe_ratio` / `min_profitable_fold_ratio`）。`promote` 的候选用命令输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`——那是每折真正被验证过的那一组，不是整个网格；`retire` 的候选要从配置里摘掉，不能让带着过期参数的东西继续跑。
+只输出三种判定：`promote`（样本外盈亏为正、样本外夏普不低于样本内一半、盈利折叠过半、样本外折叠数不少于 `min_folds`）、`watch`（通过门槛但组合只有一个品种盈利，其余品种未提供分散化贡献）、`retire`（任一门槛未过，逐条列出失败原因）。门槛在配置的 `promotion` 段调整（`min_out_pnl` / `min_out_sharpe_ratio` / `min_profitable_fold_ratio` / `min_folds`）。
+
+`min_folds` 默认 4，实测依据：沪锡在训练 1400 / 样本外 700 下只切出 2 折，一折 +470 万、一折 -205 万，盈利折叠比 50% 恰好踩线被放过去；同一份数据换成训练 900 / 样本外 450 切出 4 折后，2 折分别亏损约 69 万与 129 万，样本外夏普 0.774 掉到 0.482，改判 retire。**只跑一种窗口切分不足以下结论**，折叠不够就不评。
+
+`promote` 的候选用命令输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`——那是每折真正被验证过的那一组，不是整个网格；`retire` 的候选要从配置里摘掉，不能让带着过期参数的东西继续跑。
+
+13 个真实品种用同一套网格与同一套 walk-forward 口径筛过之后，只有豆粕在两种窗口切分下都通过全部门槛（训练 1400 / 样本外 700：样本外 +320510.95、4/4 折盈利、夏普 0.685；训练 900 / 样本外 450：样本外 +269143.40、8/8 折盈利、夏普 0.675）。其余品种要么样本外盈亏为负，要么样本外夏普留不到样本内的一半。详细数据见 CHANGELOG「品种扩展与样本外复核」。

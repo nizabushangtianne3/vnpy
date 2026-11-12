@@ -20,7 +20,9 @@ python -m vnpy.autonomous optimize --csv m_daily.csv \
 python -m vnpy.autonomous promote --run "m9999.DCE=m_wf.json"
 ```
 
-`promote` 只输出三种判定，全部由 JSON 里的样本外数字推导：`promote`（通过全部门槛）、`watch`（通过门槛但组合只有一个品种盈利，其余品种未提供分散化贡献）、`retire`（任一门槛未过，并把失败的原因逐条列出）。它不给「有潜力」这一档——能自己给自己发希望的策略已经失去了停手的能力。门槛值在配置的 `promotion` 段调整（`min_out_pnl` / `min_out_sharpe_ratio` / `min_profitable_fold_ratio`）。
+`promote` 只输出三种判定，全部由 JSON 里的样本外数字推导：`promote`（通过全部门槛）、`watch`（通过门槛但组合只有一个品种盈利，其余品种未提供分散化贡献）、`retire`（任一门槛未过，并把失败的原因逐条列出）。它不给「有潜力」这一档——能自己给自己发希望的策略已经失去了停手的能力。门槛值在配置的 `promotion` 段调整（`min_out_pnl` / `min_out_sharpe_ratio` / `min_profitable_fold_ratio` / `min_folds`）。
+
+`min_folds` 不是凑数的门槛。两折样本外一折暴利一折巨亏，相抵消后总数为正、盈利折叠比 50%，看上去「半数时间有效」——那其实只是两个结果，不是重复出现的边缘。实测踩过：沪锡在训练 1400/样本外 700 口径下只有 2 折，正好被这道 50% 线放过去判成 promote；同一份数据换成训练 900/样本外 450 切出 4 折后，其中 2 折分别亏损约 69 万与 129 万，样本外夏普从 0.774 掉到 0.482，改判 retire。**窗口切分不能只跑一种**，折叠数低于 `min_folds` 时一律不予晋级。
 
 `retire` 的候选必须从配置里摘掉，而不是让带着过期参数继续跑；`promote` 的候选用 `promote` 输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`，那是每折真正被验证过的那一组，不是整个网格。
 
