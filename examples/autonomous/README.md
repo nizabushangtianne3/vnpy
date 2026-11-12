@@ -306,3 +306,12 @@ cp examples/autonomous/strategies/autonomous_trend_strategy.py .vntrader/strateg
 ```
 
 CtaEngine 初始化时扫描 `.vntrader/strategies/` 加载该类，然后在 `app_settings.CtaStrategy.strategies` 里把 `class_name` 写成 `AutonomousTrendStrategy`。`vnpy_ctastrategy` 自带的演示策略同样可被扫描加载和装配。
+真实数据实测（豆粕 4843 根 + 螺纹 4295 根，训练 1400 / 样本外 700、24 组参数）：组合样本外合计 +285972.71、3/4 折盈利、平均夏普 0.536；同期单品种为豆粕 +320510.95（4/4 折）、螺纹 -53263.91（2/4 折）。拆开每折看，螺纹四折合计 -15915.86 几乎全线亏损——**分散化在当前参考策略上只降低了回撤，没有提高盈亏**，组合的正期望来自豆粕单腿。换品种、换策略时请先单独跑过 `backtest` / `optimize`，再用组合验证分散，不要把组合当成让亏损品种起死回生的手段。
+
+跑完 `optimize` / `portfolio` 的 walk-forward 后，用 `promote` 做晋升判定，把「要不要进仿真池」这一步也交给规则而不是人工读表：
+
+```bash
+python -m vnpy.autonomous promote --run "m9999.DCE=m_wf.json" --run "rb9999.SHFE=rb_wf.json"
+```
+
+只输出三种判定：`promote`（样本外盈亏为正、样本外夏普不低于样本内一半、盈利折叠过半）、`watch`（通过门槛但组合只有一个品种盈利，其余品种未提供分散化贡献）、`retire`（任一门槛未过，逐条列出失败原因）。门槛在配置的 `promotion` 段调整（`min_out_pnl` / `min_out_sharpe_ratio` / `min_profitable_fold_ratio`）。`promote` 的候选用命令输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`——那是每折真正被验证过的那一组，不是整个网格；`retire` 的候选要从配置里摘掉，不能让带着过期参数的东西继续跑。
