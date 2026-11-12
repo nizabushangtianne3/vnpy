@@ -18,7 +18,12 @@ from pathlib import Path
 
 from .calendar import PROFILE_NAMES
 from .config import default_config_path, load_config, validate_config
-from .runner import APP_REGISTRY, GATEWAY_REGISTRY, AutonomousRunner
+from .runner import (
+    APP_REGISTRY,
+    GATEWAY_REGISTRY,
+    AutonomousRunner,
+    atomic_write_json,
+)
 
 
 def _add_config_argument(parser: argparse.ArgumentParser) -> None:
@@ -128,6 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="name=walk_forward.json，可重复；每个 JSON 是一个候选的样本外结论",
     )
     promote_parser.add_argument("--output", default="", help="把判定结果写入 JSON 文件")
+    promote_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="把判定写回配置文件的 app_settings.CtaStrategy.strategies",
+    )
+    promote_parser.add_argument(
+        "--strategy-class",
+        default="AutonomousTrendStrategy",
+        help="--apply 装配新条目时使用的策略类名",
+    )
     sessions_parser: argparse.ArgumentParser = subparsers.add_parser(
         "sessions", help="打印后续交易时段"
     )
@@ -627,7 +642,9 @@ def command_promote(args: argparse.Namespace) -> int:
     import json
 
     from .promotion import (
+        PromotionDecision,
         PromotionRules,
+        apply_verdicts,
         evaluate_candidate,
         selected_setting,
     )
@@ -651,6 +668,7 @@ def command_promote(args: argparse.Namespace) -> int:
         return 2
 
     reports: list = []
+    armed: dict[str, dict[str, object]] = {}
     for name, path in runs.items():
         run_path: Path = Path(path)
         if not run_path.is_file():
@@ -664,6 +682,11 @@ def command_promote(args: argparse.Namespace) -> int:
         report = evaluate_candidate(name, payload, rules)
         reports.append(report)
         setting = selected_setting(payload)
+        # Only a promote verdict arms parameters. A watch verdict refused
+        # arming on purpose, so handing its parameters to --apply would write
+        # back exactly what the judgement just declined.
+        if report.verdict == "promote" and setting:
+            armed[report.name] = dict(setting)
         print(f"[{report.verdict}] {name}")
         print(
             f"    样本外 pnl={report.out_pnl:.2f} sharpe={report.out_sharpe:.3f} "
@@ -695,6 +718,33 @@ def command_promote(args: argparse.Namespace) -> int:
         )
         print(f"结果已写入：{output_path}")
 
+    if not args.apply:
+        return 0 if any(report.verdict == "promote" for report in reports) else 1
+
+    config_path: Path = Path(args.config)
+    try:
+        raw_config: dict = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"错误：无法读取配置文件 {config_path}：{exc}")
+        return 2
+    if not isinstance(raw_config, dict):
+        print(f"错误：配置文件应为 JSON 对象：{config_path}")
+        return 2
+
+    verdicts: dict[str, PromotionDecision] = {
+        report.name: PromotionDecision(
+            name=report.name,
+            verdict=report.verdict,
+            setting=armed.get(report.name, {}),
+            strategy_class=args.strategy_class,
+        )
+        for report in reports
+    }
+    updated, changes = apply_verdicts(raw_config, verdicts)
+    atomic_write_json(config_path, updated)
+    print(f"配置已写回：{config_path}")
+    for change in changes:
+        print(f"    {change}")
     return 0 if any(report.verdict == "promote" for report in reports) else 1
 
 

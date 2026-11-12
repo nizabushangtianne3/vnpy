@@ -263,3 +263,102 @@ def _as_list(value: object) -> list[object]:
         return list(value)
     return []
 
+
+@dataclass
+class PromotionDecision:
+    """One verdict plus the validated parameters it is allowed to arm."""
+
+    name: str
+    verdict: str
+    setting: dict[str, object] = field(default_factory=dict)
+    strategy_class: str = "AutonomousTrendStrategy"
+
+    def summary(self) -> dict[str, object]:
+        """Flat mapping for JSON output and assertions."""
+        return {
+            "name": self.name,
+            "verdict": self.verdict,
+            "setting": dict(self.setting),
+            "strategy_class": self.strategy_class,
+        }
+
+
+def apply_verdicts(
+    raw_config: Mapping[str, object],
+    verdicts: Mapping[str, PromotionDecision],
+    app_name: str = "CtaStrategy",
+) -> tuple[dict[str, object], list[str]]:
+    """Return a config document with promotions written into it.
+
+    Only ``app_settings[app_name].strategies`` is touched. The rest of the
+    document is carried through untouched, because a config file also holds
+    gateway credentials and risk limits that a promotion decision has no
+    business rewriting, and round-tripping through ``AutonomousConfig`` would
+    drop any key its dataclasses do not model.
+
+    A ``retire`` or ``watch`` entry for an instrument already declared is
+    removed, so a candidate that stopped working cannot keep trading on
+    parameters validated in a window that no longer exists. A ``promote``
+    entry is refreshed with its validated parameters, or appended when the
+    instrument is not yet declared. Instruments nobody judged are left
+    exactly as the operator declared them. The change list states what
+    happened while writing rather than being diffed afterwards, because a
+    diff guesses at intent and the log has to state it.
+    """
+    changes: list[str] = []
+    document: dict[str, object] = dict(raw_config)
+
+    app_settings: dict[str, object] = {}
+    existing_app_settings: object = document.get("app_settings")
+    if isinstance(existing_app_settings, dict):
+        app_settings = dict(existing_app_settings)
+
+    app_block: dict[str, object] = {}
+    existing_block: object = app_settings.get(app_name)
+    if isinstance(existing_block, dict):
+        app_block = dict(existing_block)
+
+    entries: list[object] = []
+    declared: object = app_block.get("strategies")
+    if isinstance(declared, list):
+        entries = list(declared)
+
+    for symbol, decision in verdicts.items():
+        index: int | None = None
+        for position, entry in enumerate(entries):
+            if isinstance(entry, dict) and entry.get("vt_symbol") == symbol:
+                index = position
+                break
+
+        if decision.verdict != PROMOTE:
+            # Any verdict other than promote means do not arm, so an existing
+            # declaration is removed instead of silently left trading.
+            if index is not None:
+                entries.pop(index)
+                changes.append(f"{symbol} {decision.verdict}，已移出配置")
+            continue
+
+        if index is None:
+            entries.append(
+                {
+                    "class_name": decision.strategy_class,
+                    "vt_symbol": symbol,
+                    "auto_active": True,
+                    "setting": dict(decision.setting),
+                }
+            )
+            changes.append(f"{symbol} 通过门槛，已按验证参数装配")
+            continue
+
+        existing: object = entries[index]
+        if isinstance(existing, dict):
+            refreshed: dict[str, object] = dict(existing)
+            refreshed["setting"] = dict(decision.setting)
+            entries[index] = refreshed
+            changes.append(f"{symbol} 参数已刷新为最新验证值")
+
+    app_block["strategies"] = entries
+    app_settings[app_name] = app_block
+    document["app_settings"] = app_settings
+    return document, changes
+

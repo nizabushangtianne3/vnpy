@@ -24,7 +24,16 @@ python -m vnpy.autonomous promote --run "m9999.DCE=m_wf.json"
 
 `min_folds` 不是凑数的门槛。两折样本外一折暴利一折巨亏，相抵消后总数为正、盈利折叠比 50%，看上去「半数时间有效」——那其实只是两个结果，不是重复出现的边缘。实测踩过：沪锡在训练 1400/样本外 700 口径下只有 2 折，正好被这道 50% 线放过去判成 promote；同一份数据换成训练 900/样本外 450 切出 4 折后，其中 2 折分别亏损约 69 万与 129 万，样本外夏普从 0.774 掉到 0.482，改判 retire。**窗口切分不能只跑一种**，折叠数低于 `min_folds` 时一律不予晋级。
 
-`retire` 的候选必须从配置里摘掉，而不是让带着过期参数继续跑；`promote` 的候选用 `promote` 输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`，那是每折真正被验证过的那一组，不是整个网格。
+`retire` 与 `watch` 的候选必须从配置里摘掉，而不是让带着过期参数继续跑。这一步由 `--apply` 完成，不需要人工誊写：
+
+```bash
+python -m vnpy.autonomous promote --apply \
+    --run "m9999.DCE=m_wf.json" --run "rb9999.SHFE=rb_wf.json"
+```
+
+`--apply` 只改 `app_settings.CtaStrategy.strategies` 这一个键。配置文件里还放着交易接口账号与风控上限，晋升判定无权重写它们，因此不走整套配置序列化。写入是原子的（临时文件 + `os.replace`），值守进程正在读同一文件也不会写坏。重复执行是幂等的：第二次会识别为「参数已刷新为最新验证值」，不会堆出重复条目，值守每轮醒来跑一次即可。
+
+新装配的条目用 `--strategy-class` 指定策略类（默认 `AutonomousTrendStrategy`）。`watch` 不携带参数写回——watch 本身就是拒绝装配的判定，把它的参数写回去等于把刚拒掉的东西装回去。
 
 ## 阶段二b：让系统自己走完阶段一到二
 

@@ -17,7 +17,9 @@ from vnpy.autonomous.promotion import (
     PROMOTE,
     RETIRE,
     WATCH,
+    PromotionDecision,
     PromotionRules,
+    apply_verdicts,
     evaluate_candidate,
     selected_setting,
 )
@@ -170,4 +172,155 @@ def test_malformed_payload_does_not_crash_the_gate() -> None:
     """A payload from a failed run must retire, not raise."""
     report = evaluate_candidate("m9999.DCE", {"folds": [{"fold": 1}]})
     assert report.verdict == RETIRE
+
+
+def _decision(
+    name: str, verdict: str, setting: dict | None = None
+) -> PromotionDecision:
+    return PromotionDecision(
+        name=name,
+        verdict=verdict,
+        setting=setting or {"fast_window": 5},
+    )
+
+
+def test_apply_adds_a_promoted_candidate() -> None:
+    """A promote verdict must reach the config a runner reads."""
+    document, changes = apply_verdicts(
+        {},
+        {"m9999.DCE": _decision("m9999.DCE", PROMOTE, {"fast_window": 5, "trail_stop": 4.0})},
+    )
+    strategies = document["app_settings"]["CtaStrategy"]["strategies"]  # type: ignore[index]
+    assert strategies == [
+        {
+            "class_name": "AutonomousTrendStrategy",
+            "vt_symbol": "m9999.DCE",
+            "auto_active": True,
+            "setting": {"fast_window": 5, "trail_stop": 4.0},
+        }
+    ]
+    assert changes == ["m9999.DCE 通过门槛，已按验证参数装配"]
+
+
+def test_apply_removes_a_retired_candidate() -> None:
+    """A retired instrument must not keep trading on stale parameters."""
+    document, changes = apply_verdicts(
+        {
+            "app_settings": {
+                "CtaStrategy": {
+                    "strategies": [
+                        {
+                            "class_name": "AutonomousTrendStrategy",
+                            "vt_symbol": "rb9999.SHFE",
+                            "setting": {"fast_window": 5},
+                        }
+                    ]
+                }
+            }
+        },
+        {"rb9999.SHFE": _decision("rb9999.SHFE", RETIRE)},
+    )
+    assert document["app_settings"]["CtaStrategy"]["strategies"] == []  # type: ignore[index]
+    assert changes == ["rb9999.SHFE retire，已移出配置"]
+
+
+def test_apply_removes_a_watched_candidate() -> None:
+    """Watch refused arming, so it must not end up armed in the config."""
+    document, _ = apply_verdicts(
+        {
+            "app_settings": {
+                "CtaStrategy": {
+                    "strategies": [
+                        {
+                            "class_name": "AutonomousTrendStrategy",
+                            "vt_symbol": "sn9999.SHFE",
+                            "setting": {"fast_window": 5},
+                        }
+                    ]
+                }
+            }
+        },
+        {"sn9999.SHFE": _decision("sn9999.SHFE", WATCH)},
+    )
+    assert document["app_settings"]["CtaStrategy"]["strategies"] == []  # type: ignore[index]
+
+
+def test_apply_leaves_unjudged_entries_alone() -> None:
+    """An operator's own declaration is not a promotion decision."""
+    original = {
+        "app_settings": {
+            "CtaStrategy": {
+                "strategies": [
+                    {"class_name": "ManualStrategy", "vt_symbol": "ag9999.SHFE"}
+                ]
+            }
+        }
+    }
+    document, changes = apply_verdicts(
+        original,
+        {"m9999.DCE": _decision("m9999.DCE", PROMOTE)},
+    )
+    strategies = document["app_settings"]["CtaStrategy"]["strategies"]  # type: ignore[index]
+    assert strategies[0]["class_name"] == "ManualStrategy"
+    assert strategies[0]["vt_symbol"] == "ag9999.SHFE"
+    assert len(strategies) == 2
+    assert changes == ["m9999.DCE 通过门槛，已按验证参数装配"]
+
+
+def test_apply_preserves_the_rest_of_the_document() -> None:
+    """Gateway credentials and risk limits are none of promotion's business."""
+    original = {
+        "mode": "live",
+        "gateways": {"CTP": {"用户名": "operator", "密码": "secret"}},
+        "risk": {"daily_loss_limit": 5000},
+        "runtime": {"state_file": "autonomous_state.json"},
+        "app_settings": {},
+    }
+    document, _ = apply_verdicts(
+        original, {"m9999.DCE": _decision("m9999.DCE", PROMOTE)}
+    )
+    assert document["mode"] == "live"
+    assert document["gateways"] == {"CTP": {"用户名": "operator", "密码": "secret"}}
+    assert document["risk"] == {"daily_loss_limit": 5000}
+    assert document["runtime"] == {"state_file": "autonomous_state.json"}
+
+
+def test_apply_refreshes_parameters_on_an_existing_entry() -> None:
+    """The armed setting is the one the latest fold validated."""
+    document, changes = apply_verdicts(
+        {
+            "app_settings": {
+                "CtaStrategy": {
+                    "strategies": [
+                        {
+                            "class_name": "AutonomousTrendStrategy",
+                            "vt_symbol": "m9999.DCE",
+                            "setting": {"fast_window": 10, "trail_stop": 0.0},
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "m9999.DCE": _decision(
+                "m9999.DCE", PROMOTE, {"fast_window": 5, "trail_stop": 4.0}
+            )
+        },
+    )
+    strategies = document["app_settings"]["CtaStrategy"]["strategies"]  # type: ignore[index]
+    assert len(strategies) == 1
+    assert strategies[0]["setting"] == {"fast_window": 5, "trail_stop": 4.0}
+    assert changes == ["m9999.DCE 参数已刷新为最新验证值"]
+
+
+def test_apply_never_emits_a_setting_for_a_refused_verdict() -> None:
+    """A watch decision carries no setting, so nothing stale can be armed."""
+    decision = PromotionDecision(
+        name="sn9999.SHFE", verdict=WATCH, setting={"fast_window": 5}
+    )
+    document, _ = apply_verdicts(
+        {},
+        {"sn9999.SHFE": decision},
+    )
+    assert document["app_settings"]["CtaStrategy"]["strategies"] == []  # type: ignore[index]
 

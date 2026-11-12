@@ -77,6 +77,19 @@
 
 数据获取补充：东财 `push2his` 的 secid 不是按品种名猜得到的，需先用 `searchapi.eastmoney.com/api/suggest/get?input=&type=14` 拿主连简称（如 `rbm`、`hcm`、`sn`），前面加交易所市场号（上期所 113、大商所 115、郑商所 118、中金 8）拼成 `113.sn` 这类 secid。返回的 klines 数组顺序为 datetime,open,close,high,low[,volume]，需重排列与开高低收对齐。农产品主连（115.pm、115.zlm 等）在 klt=101 下取不到数据，只有带月份的具体合约（如 115.ma611）能取到，但那种序列太短（316 根）不足以做 walk-forward
 
+## 晋升判定写回配置（本轮新增）
+
+此前 `promote` 只把「建议参数」打印到屏幕上，配置还得人工誊写；退役条目也只是注释里写了要摘掉、并无实现。自主到这里就断了——判定能自己做，装配还得人做。本轮把这一环闭合：
+
+1. `promote` 新增 `--apply`：判定直接写回配置文件的 `app_settings.CtaStrategy.strategies`。`promote` 装配新条目并带上验证参数，`retire` 与 `watch` 摘掉已声明的条目（带过期参数继续跑比不跑更危险），未判定的条目原样保留（运营自己声明的东西不是晋升判定的管辖范围）
+2. 写回走 `atomic_write_json`（临时文件 + `os.replace` + PermissionError 退避重试），值守进程正在读同一配置时不会写坏
+3. 只改 `strategies` 一个键。配置文件里同时放着 CTP 账号与风控上限，晋升判定无权重写它们；也不走 `AutonomousConfig` 序列化，因为那会丢掉 dataclass 未建模的键。实测写回后 `gateways` / `risk` / `runtime` / `promotion` 四个段逐字段与写回前一致
+4. `watch` 不携带参数：watch 本身就是拒绝装配的判定，把它的参数写回去等于把刚拒掉的东西装回去。测试锁定该行为（`test_apply_never_emits_a_setting_for_a_refused_verdict`）
+5. 幂等：同一份结论连续 `--apply` 两次，第二次识别为「参数已刷新为最新验证值」，条目数不变（实测 1 条）。值守每轮醒来跑一次 promote 不会污染配置
+6. 新增 `vnpy.autonomous.promotion.apply_verdicts` 与 `PromotionDecision`，附 7 个回归测试（装配、退役摘除、watch 摘除、未判定条目不动、保留凭据与风控段、刷新已有条目参数、watch 不携带参数）
+
+闭环实测（`--config` 指向配置副本）：豆粕 `wf_m_fine2.json`（训练 900 / 样本外 450 的 8 折口径）判 promote，螺纹判 retire，写回后 `strategies` 恰为一条豆粕条目、参数 `fast_window=5, slow_window=40, stop_atr=2.0, trail_stop=4.0`，与 `promote` 输出的建议参数一致。
+
 ## 实测证伪记录
 
 以下改动经过合成序列 A/B 对照后被放弃，记录在此避免重复尝试：
