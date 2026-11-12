@@ -14,6 +14,7 @@ fill. It exists so that "the signal says buy" can be cross-checked against
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -38,6 +39,11 @@ PRICE_SCALE: float = 100.0
 PCT_SCALE: float = 100.0
 
 DEFAULT_FIELDS: str = "f43,f57,f58,f60,f86,f169,f170"
+
+# When the host has a system proxy (common on Windows), urllib funnels these requests
+# through it and Eastmoney drops the connection. Honoring a NO_PROXY opt-out keeps quote
+# fetches local and reproducible.
+TRUST_ENV_DISABLED: bool = bool(os.environ.get("VNPY_MARKET_NO_PROXY", ""))
 REQUEST_TIMEOUT_SECS: float = 10.0
 RETRY_BACKOFF_SECS: float = 0.4
 
@@ -79,6 +85,20 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _make_session() -> requests.Session:
+    """Build a requests.Session that stays off a system HTTP proxy.
+
+    A Windows machine with a system proxy makes urllib sometimes route
+    localhost-only traffic through it; Eastmoney then closes the connection
+    with no response and the retry loop looks like an outage. Building a
+    session with trust_env disabled keeps quote fetches reproducible.
+    """
+    session: requests.Session = requests.Session()
+    if TRUST_ENV_DISABLED:
+        session.trust_env = False
+    return session
+
+
 def resolve_secid(symbol: str) -> str:
     """Map a bare A-share symbol to Eastmoney's MARKET.SYMBOL form.
 
@@ -107,12 +127,16 @@ def _request_json(url: str, params: dict[str, str]) -> dict:
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            response: requests.Response = requests.get(
-                url,
-                params=params,
-                headers=_headers(),
-                timeout=REQUEST_TIMEOUT_SECS,
-            )
+            session: requests.Session = _make_session()
+            try:
+                response: requests.Response = session.get(
+                    url,
+                    params=params,
+                    headers=_headers(),
+                    timeout=REQUEST_TIMEOUT_SECS,
+                )
+            finally:
+                session.close()
             response.raise_for_status()
             payload: object = response.json()
             if isinstance(payload, dict):

@@ -27,12 +27,12 @@ class _FakeResponse:
 
 
 def _patch_get(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
-    def fake_get(url: str, params: dict, headers: dict, timeout: float) -> _FakeResponse:
+    def fake_get(self: object, url: str, params: dict, headers: dict, timeout: float) -> _FakeResponse:
         fake_get.last_url = url  # type: ignore[attr-defined]
         fake_get.last_params = params  # type: ignore[attr-defined]
         return _FakeResponse(payload)
 
-    monkeypatch.setattr(market.requests, "get", staticmethod(fake_get))
+    monkeypatch.setattr(market.requests.Session, "get", fake_get)
 
 
 def test_secid_keeps_the_exchange_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,11 +158,11 @@ def test_network_failure_is_retried_then_reported(
     """Transient resets should not crash the caller with a raw exception."""
     calls: list[int] = []
 
-    def flaky(url: str, params: dict, headers: dict, timeout: float) -> _FakeResponse:
+    def flaky(self: object, url: str, params: dict, headers: dict, timeout: float) -> _FakeResponse:
         calls.append(1)
         raise market.requests.exceptions.ConnectionError("reset")
 
-    monkeypatch.setattr(market.requests, "get", staticmethod(flaky))
+    monkeypatch.setattr(market.requests.Session, "get", flaky)
     original_sleep = market.time.sleep
     monkeypatch.setattr(market.time, "sleep", lambda _s: None)
 
@@ -212,3 +212,35 @@ def argparse_namespace(argv: list[str]) -> object:
     from vnpy.autonomous.__main__ import build_parser
 
     return build_parser().parse_args(argv)
+
+def test_cli_quotes_prints_table_and_reports_missing_symbol(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The table mode must show resolved rows and name the failures."""
+    from vnpy.autonomous.__main__ import command_quotes
+
+    payload: dict = {
+        "data": {
+            "diff": [
+                {
+                    "f2": 365583,
+                    "f3": -67,
+                    "f4": -2481,
+                    "f12": "000001",
+                    "f14": "SH Composite",
+                    "f18": 368064,
+                    "f124": 1794471117,
+                }
+            ]
+        }
+    }
+    _patch_get(monkeypatch, payload)
+
+    code: int = command_quotes(argparse_namespace(["quotes", "--symbol", "000001.SH", "--symbol", "666666"]))
+
+    assert code == 0
+    out: str = capsys.readouterr().out
+    assert "SH Composite" in out
+    assert "3655.83" in out
+    assert "3680.64" in out
+    assert "666666" in out
