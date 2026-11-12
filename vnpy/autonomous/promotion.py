@@ -35,18 +35,24 @@ class PromotionRules:
     min_out_pnl: float = 0.0
     min_out_sharpe_ratio: float = 0.5
     min_profitable_fold_ratio: float = 0.5
+    min_folds: int = 4
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> PromotionRules:
         """Build rules from a raw config dict, ignoring unknown keys."""
+        defaults: PromotionRules = cls()
         known: set[str] = set(cls().__dataclass_fields__)
-        return cls(
-            **{
-                key: _as_float(value)
-                for key, value in data.items()
-                if key in known and value is not None
-            }
-        )
+        values: dict[str, float] = {}
+        int_fields: set[str] = {
+            name for name in known if isinstance(getattr(defaults, name), int)
+        }
+        for key, value in data.items():
+            if key not in known or value is None:
+                continue
+            values[key] = (
+                int(_as_float(value)) if key in int_fields else _as_float(value)
+            )
+        return cls(**values)  # type: ignore[arg-type]
 
     def to_dict(self) -> dict[str, float]:
         """Serialize to a plain dict for config files."""
@@ -125,6 +131,14 @@ def evaluate_candidate(
         reasons.append(
             f"盈利折叠 {profitable_folds}/{len(fold_pnls)} 低于 "
             f"{rules.min_profitable_fold_ratio:.0%}"
+        )
+    if folds and len(folds) < rules.min_folds:
+        # Two folds where one wins and one loses average into "healthy"
+        # through no merit of their own. A fold count below the floor means
+        # the ratio gate is measuring noise, not a repeated edge.
+        reasons.append(
+            f"样本外折叠仅 {len(folds)} 个，少于 {rules.min_folds} 个，"
+            "不足以支撑「多数折叠盈利」的判断"
         )
 
     # A portfolio result carried by one leg is not diversification, and the
@@ -233,6 +247,13 @@ def _as_float(value: object, default: float = 0.0) -> float:
         return default
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, str):
+        # Hand-written config files quote their numbers often enough that
+        # rejecting "6" silently would turn a threshold into zero.
+        try:
+            return float(value.strip())
+        except ValueError:
+            return default
     return default
 
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from vnpy.autonomous.promotion import (
     PROMOTE,
     RETIRE,
@@ -50,7 +52,7 @@ def _payload(pnls: list[float], train_sharpe: float = 1.0) -> dict:
 
 
 def test_promotes_a_candidate_that_clears_every_gate() -> None:
-    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0]))
+    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0, 30000.0, 40000.0]))
     assert report.verdict == PROMOTE
     assert report.profitable_fold_ratio == 1.0
     assert report.reasons
@@ -78,9 +80,42 @@ def test_retires_when_only_one_fold_is_profitable() -> None:
     assert any("盈利折叠" in reason for reason in report.reasons)
 
 
+def test_retires_when_too_few_folds_support_the_ratio() -> None:
+    """One winner and one loser cannot average into a healthy edge.
+
+    A two-fold run where one window wins and the other loses reports a 50%
+    profitable ratio, which reads as "half the time it works". It is not a
+    repeated edge, it is two outcomes, and the ratio gate was measuring
+    noise. This is the shape that let a tin candidate promote on a coarse
+    window split while the same data on a finer split retired it.
+    """
+    payload = _payload([4701564.99, -2051770.90])
+    payload["aggregate_test_sharpe"] = 0.774
+    payload["aggregate_train_sharpe"] = 1.024
+    report = evaluate_candidate("sn9999.SHFE", payload)
+    assert report.verdict == RETIRE
+    assert any("折叠仅" in reason for reason in report.reasons)
+
+
+def test_fold_floor_is_configurable() -> None:
+    """An operator with more history may lower the floor."""
+    payload = _payload([4701564.99, -2051770.90])
+    rules = PromotionRules(min_folds=2)
+    report = evaluate_candidate("sn9999.SHFE", payload, rules)
+    assert report.verdict != RETIRE or not any("折叠仅" in r for r in report.reasons)
+
+
+def test_reads_min_folds_as_an_integer() -> None:
+    """A fold count is a count, not a ratio; keep the type honest."""
+    rules = PromotionRules.from_dict({"min_folds": "6", "min_out_pnl": "100"})
+    assert rules.min_folds == 6
+    assert isinstance(rules.min_folds, int)
+    assert rules.min_out_pnl == pytest.approx(100.0)
+
+
 def test_watch_when_one_leg_carries_the_whole_portfolio() -> None:
     """A portfolio result carried by one instrument is not diversification."""
-    payload = _payload([50000.0, 60000.0])
+    payload = _payload([50000.0, 60000.0, 30000.0, 40000.0])
     for fold in payload["folds"]:
         fold["leg_pnls"] = {"m": fold["test_pnl"] + 100.0, "rb": -100.0}
     report = evaluate_candidate("portfolio", payload)
@@ -102,7 +137,7 @@ def test_retires_when_the_payload_has_no_folds() -> None:
 def test_rules_are_configurable() -> None:
     """A stricter operator raises the bar and the verdict must follow."""
     rules = PromotionRules(min_out_sharpe_ratio=0.99, min_profitable_fold_ratio=1.0)
-    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0]), rules)
+    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0, 30000.0, 40000.0]), rules)
     assert report.verdict == RETIRE
 
 
@@ -123,7 +158,7 @@ def test_selected_setting_refuses_to_arm_a_grid() -> None:
 
 
 def test_report_summary_is_machine_readable() -> None:
-    report = evaluate_candidate("m9999.DCE", _payload([50000.0]))
+    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0, 30000.0, 40000.0]))
     payload = report.summary()
     assert payload["verdict"] == PROMOTE
     assert payload["name"] == "m9999.DCE"
