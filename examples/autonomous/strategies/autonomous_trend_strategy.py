@@ -133,13 +133,23 @@ class AutonomousTrendStrategy(CtaTemplate):
                 self.put_event()
                 return
 
-        if cross_over and self.pos <= 0:
-            if self.pos < 0:
-                self.cover(bar.close_price, -self.pos)
+        # A confirmed cross flips the position outright; while the trend keeps
+        # running the strategy keeps adding up to the cap, because a trend
+        # follower earns on scale, not on a single lot. Gating on the cross
+        # alone pins the position at one lot and makes max_position dead code.
+        if cross_over:
+            if self.pos < self.max_position:
+                if self.pos < 0:
+                    self.cover(bar.close_price, -self.pos)
+                self.buy(bar.close_price, self._open_volume(1))
+        elif cross_below:
+            if self.pos > -self.max_position:
+                if self.pos > 0:
+                    self.sell(bar.close_price, self.pos)
+                self.short(bar.close_price, self._open_volume(-1))
+        elif self.fast_ma0 > self.slow_ma0 and 0 < self.pos < self.max_position:
             self.buy(bar.close_price, self._open_volume(1))
-        elif cross_below and self.pos >= 0:
-            if self.pos > 0:
-                self.sell(bar.close_price, self.pos)
+        elif self.fast_ma0 < self.slow_ma0 and -self.max_position < self.pos < 0:
             self.short(bar.close_price, self._open_volume(-1))
 
         self.equity = self._mark_to_market()

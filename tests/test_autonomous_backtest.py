@@ -17,7 +17,7 @@ import pytest
 
 
 from vnpy.trader.constant import Direction, Exchange, Offset
-from vnpy.trader.object import TradeData
+from vnpy.trader.object import BarData, TradeData
 
 from vnpy.autonomous.backtest import (
     load_bars_from_csv,
@@ -446,3 +446,52 @@ def test_load_bars_from_csv_rejects_bad_header(tmp_path: Path) -> None:
     path.write_text("foo,bar\n1,2\n", encoding="utf-8")
     with pytest.raises(ValueError, match="缺少必需列"):
         load_bars_from_csv(str(path), "rb2410")
+
+
+def test_trend_strategy_scales_into_a_running_trend() -> None:
+    """A trend follower must add up to its cap, not stop at one lot.
+
+    Gating entry on the cross bar alone pins the position at one lot and
+    turns ``max_position`` into dead config: the strategy captures one
+    contract worth of every trend and reports a much worse outcome than a
+    real fan of the same strategy would produce.
+    """
+    strategy = load_strategy_class()(
+        cta_engine=None,
+        strategy_name="bt",
+        vt_symbol="rb9999.SHFE",
+        setting={
+            "fast_window": 3,
+            "slow_window": 5,
+            "fixed_size": 1,
+            "max_position": 3,
+        },
+    )
+
+    bars: list[BarData] = []
+    base = datetime(2024, 1, 2, 9, 0)
+    price = 100.0
+    # Warm up flat, then a steady rally: the cross fires once and the trend
+    # keeps running for many bars afterwards.
+    for index in range(45):
+        if index < 25:
+            close = 100.0
+        else:
+            close = 100.0 + (index - 24) * 0.5
+        bars.append(
+            build_bar(
+                base + timedelta(minutes=index),
+                price,
+                close + 0.3,
+                min(price, close) - 0.3,
+                close,
+            )
+        )
+        price = close
+
+    result: BacktestResult = run_backtest(strategy, bars, BacktestSettings())
+
+    # The cap is 3 lots, so a sustained rally must reach the cap.
+    assert result.open_position == 3
+    # Multiple adds mean more than one fill per trend leg.
+    assert result.trade_count > 1
