@@ -47,6 +47,55 @@ def test_parse_grid_rejects_empty_value_list() -> None:
         _parse_grid("fast_window=")
 
 
+def test_pick_best_params_skips_losing_combinations() -> None:
+    """Ranking by Sharpe alone validates a losing configuration.
+
+    A smooth, thinly traded curve can post a respectable Sharpe while its
+    total pnl is negative; carrying that parameter set into the
+    out-of-sample window walks the fold into a loser.
+    """
+    from vnpy.autonomous.__main__ import _pick_best_params
+
+    rows: list[dict] = [
+        {
+            "params": {"fast_window": 5},
+            "total_pnl": -4000.0,
+            "sharpe": 3.2,
+        },
+        {
+            "params": {"fast_window": 10},
+            "total_pnl": 1200.0,
+            "sharpe": 1.1,
+        },
+        {
+            "params": {"fast_window": 20},
+            "total_pnl": 600.0,
+            "sharpe": 0.4,
+        },
+    ]
+
+    assert _pick_best_params(rows) == {"fast_window": 10}
+
+
+def test_pick_best_params_falls_back_when_everything_loses() -> None:
+    """A fold with no profitable combination still needs a parameter set."""
+    from vnpy.autonomous.__main__ import _pick_best_params
+
+    rows: list[dict] = [
+        {"params": {"fast_window": 5}, "total_pnl": -10.0, "sharpe": -2.0},
+        {"params": {"fast_window": 10}, "total_pnl": -5.0, "sharpe": -1.0},
+    ]
+
+    assert _pick_best_params(rows) == {"fast_window": 10}
+
+
+def test_pick_best_params_rejects_empty_rows() -> None:
+    from vnpy.autonomous.__main__ import _pick_best_params
+
+    with pytest.raises(ValueError, match="训练段"):
+        _pick_best_params([])
+
+
 def test_optimize_cli_writes_json_output(tmp_path: Path) -> None:
     """The scan is only useful if the machine can consume its ranking."""
     import os

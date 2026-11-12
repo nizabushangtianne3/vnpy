@@ -308,6 +308,26 @@ def _parse_grid(spec: str) -> list[dict[str, int | float]]:
     return settings_list
 
 
+def _pick_best_params(rows: list[dict]) -> dict:
+    """Choose the parameter set to carry into the out-of-sample window.
+
+    Ranking by Sharpe alone can lift a combination that lost money on the
+    training window: a curve with few trades and a smooth drift scores a
+    respectable Sharpe even while its total pnl is negative, and the whole
+    fold then validates a losing configuration. Profitable combinations rank
+    first; only when every combination loses does Sharpe decide, so the fold
+    still reports something for an operator to review.
+    """
+    if not rows:
+        raise ValueError("没有可用的训练段回测结果")
+
+    profitable: list[dict] = [row for row in rows if row["total_pnl"] > 0]
+    pool: list[dict] = profitable or rows
+    pool.sort(key=lambda item: item["sharpe"], reverse=True)
+    params: dict = pool[0]["params"]
+    return params
+
+
 def command_optimize(args: argparse.Namespace) -> int:
     """Run the same strategy over a parameter grid and rank the results."""
     try:
@@ -457,7 +477,10 @@ def command_optimize(args: argparse.Namespace) -> int:
                 f" {row['max_drawdown']:>10.2f} {row['trade_count']:>8}"
                 f" {row['win_rate']:>9.3f}  {params_text}"
             )
-        best = rows[0] if rows else None
+        best_params: dict = _pick_best_params(rows) if rows else {}
+        best: dict | None = next(
+            (row for row in rows if row["params"] == best_params), None
+        )
     else:
         print(
             f"walk-forward 验证：训练 {args.train_bars} 根，"
@@ -482,8 +505,7 @@ def command_optimize(args: argparse.Namespace) -> int:
             train_rows: list[dict] = []
             for config in grid:
                 train_rows.append(_run_one(config, train_bars_slice))
-            train_rows.sort(key=lambda item: item["sharpe"], reverse=True)
-            best_config: dict = train_rows[0]["params"]
+            best_config: dict = _pick_best_params(train_rows)
             out_of_sample: dict = _run_one(best_config, test_bars_slice)
             fold_results.append(
                 {

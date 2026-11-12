@@ -153,6 +153,8 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40
 
 输出按夏普排序的参数表，包含每组的 `total_pnl`、`max_drawdown`、`trade_count`、`win_rate`。所有组合 `total_pnl <= 0` 时返回 1，可直接当流水线门槛。需要把结果交给外部程序或 CI 工件时，加 `--output path/to/result.json`，普通网格与 walk-forward 两种模式都会落盘：
 
+选参规则：盈利的组合优先，再在其中按夏普取最高；只有全部组合都亏损时才退化为单纯按夏普排序，并照样在末尾给出结论。纯按夏普选参会把「交易很少、曲线平滑但整体亏损」的组合送到样本外检验，等于用一个亏损参数去验证过拟合。
+
 ```bash
 python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40" \
     --csv path/to/rb2410_1min.csv --output path/to/result.json
