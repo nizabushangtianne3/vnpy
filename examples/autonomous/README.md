@@ -98,6 +98,8 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 策略级健康熔断：连续亏损、当日亏损、单位时间错误次数达到阈值即暂停该策略（调用引擎的 `stop_strategy`），冷却结束后自动 `start_strategy` 恢复。`0` 表示不启用该规则。
 
+熔断会在停用策略之前先按策略归属平掉它的未平仓头寸：只有该策略的合约且其持仓方向与 `pos` 一致时才会生成平仓单，走与账户级熔断相同的 `OffsetConverter` 拆分路径；账户级熔断仍会平掉全部头寸。策略已空仓时不会产生多余平仓单。
+
 ### `portfolio`
 
 `method` 为 `equal` 或 `inverse_volatility`，按账户权益给出各策略的目标资金（仅供参考，需要策略自行读取使用）；`max_weight` 为单策略权重上限，采用水填算法分配。

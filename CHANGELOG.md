@@ -34,6 +34,7 @@
 28. 修复交易子进程重启后已熔断策略仍会被批量重新启动的问题：策略启动改为逐策略执行，启动前读取恢复后的健康快照，`halted=True` 的策略保持引擎停用并输出警告；无逐策略接口的引擎保留批量启动兜底，附真实 CTA 引擎回归测试
 29. 修正离线回测器与 `vnpy_ctastrategy` 官方回测器在成本与撮合上的四处偏差，避免把不可信的回测曲线当成盈利证据：成交价改为取限价与当根开盘价中更有利的一侧（买入 `min(limit, open)`、卖出 `max(limit, open)`），跳空不再以远优于限价的价格成交；滑点不再混入成交价，而是与手续费一起按合约乘数计为成本（`commission = turnover * size * rate`、`slippage = volume * size * slippage`），对齐官方 DailyResult 口径；胜负回合配对改为按开仓方向匹配，修掉把多头平仓配到空头开仓上导致胜率完全颠倒的问题；委托价入队前按 `pricetick` 取整；`BacktestSettings.size` 改为 float 以支持非整数乘数；附 4 个回归测试，并把 `examples/autonomous/README.md` 的实测结论更新为 7 笔成交、1 笔盈利、总盈亏约 +2763.87，同时写明默认合成序列的 walk-forward 样本外 pnl 约 +11.91、平均夏普 0.013 已触发淘汰门槛
 30. `backtest` / `optimize` CLI 的 `--size` 参数支持非整数合约乘数（如 300 股一手或点位折算品种）；`optimize` 新增 `--output` 参数，把普通网格排名与 walk-forward 折叠明细（含样本内外 pnl、夏普与最优参数）写入 JSON 文件，供外部程序、CI 工件与值守脚本直接消费；附 2 个 CLI 导出回归测试与 README 用法说明
+31. 修复策略健康熔断只停策略、不处理持仓的风险敞口问题：熔断现在先按策略归属平掉其未平仓头寸（经 `symbol_strategy_map` 匹配合约、按方向核对 `pos`，平仓走 OffsetConverter 的 SHFE/INE 拆分且不被熔断自身拦截），再停用该策略；没有持仓时不再产生多余平仓单；`RiskGuard.flatten_positions` 增加 `strategy_name` 过滤参数，账户整体熔断沿用全平行为；附 2 个回归测试
 
 ## 调整
 

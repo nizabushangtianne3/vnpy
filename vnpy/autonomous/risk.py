@@ -285,7 +285,7 @@ class RiskGuard:
         if self.limits.kill_switch_on_breach:
             self.flatten_positions()
 
-    def flatten_positions(self) -> None:
+    def flatten_positions(self, strategy_name: str | None = None) -> None:
         """Cancel active orders and close all open positions."""
         self.cancel_all_active_orders()
 
@@ -294,6 +294,10 @@ class RiskGuard:
         for position in positions:
             if position.volume <= 0:
                 continue
+
+            if strategy_name is not None:
+                if not self._owns_position(position, strategy_name):
+                    continue
 
             if position.direction == Direction.LONG:
                 close_direction: Direction = Direction.SHORT
@@ -315,6 +319,9 @@ class RiskGuard:
                 offset=Offset.CLOSE,
                 reference="risk_flatten",
             )
+
+            if strategy_name is not None:
+                original_req.reference = f"CtaStrategy_{strategy_name}"
 
             # The offset conversion happens here, not inside send_order.
             # SHFE/INE require splitting a close into close-today and
@@ -345,6 +352,52 @@ class RiskGuard:
                 self.main_engine.update_order_request(
                     req, vt_orderid, position.gateway_name
                 )
+
+    def _owns_position(self, position: PositionData, strategy_name: str) -> bool:
+        """Whether a strategy owns this position through its CTA engine.
+
+        ``PositionData`` carries no owning strategy, so the guard resolves
+        ownership the way the CTA engine does: the strategy must trade the
+        same contract and hold volume in the same direction. Without this
+        link a per-strategy halt can only flatten the whole account, which
+        would punish unrelated strategies for one strategy's breach.
+        """
+        engine: Any = self._cta_engine()
+        if engine is None:
+            return False
+
+        strategies: Any = getattr(engine, "symbol_strategy_map", None)
+        if not isinstance(strategies, dict):
+            return False
+
+        candidates: Any = strategies.get(position.vt_symbol)
+        if not candidates:
+            return False
+
+        strategy: Any
+        for strategy in candidates:
+            name: Any = getattr(strategy, "strategy_name", None)
+            if name != strategy_name:
+                continue
+            pos_value: Any = getattr(strategy, "pos", 0.0)
+            try:
+                pos: float = float(pos_value)
+            except (TypeError, ValueError):
+                pos = 0.0
+            if position.direction == Direction.LONG:
+                return pos > 0
+            return pos < 0
+        return False
+
+    def _cta_engine(self) -> Any:
+        """Return the CTA strategy engine registered on the main engine."""
+        get_engine: Any = getattr(self.main_engine, "get_engine", None)
+        if not callable(get_engine):
+            return None
+        try:
+            return get_engine("cta")
+        except Exception:   # noqa: BLE001
+            return None
 
     def _flatten_price(
         self, position: PositionData, contract: ContractData | None

@@ -775,10 +775,32 @@ class AutonomousRunner:
     def _pause_strategy(self, strategy_name: str, reason: str) -> None:
         """Pause one strategy through its engine."""
         logger.warning("[autonomous] 策略 %s 健康熔断：%s", strategy_name, reason)
+        # A halted strategy stops trading but keeps its open risk, so the
+        # position must be closed here or an unmanaged position outlives
+        # the breaker and keeps losing money.
+        if self.guard is not None and self._has_open_position(strategy_name):
+            self.guard.flatten_positions(strategy_name)
         if self.config.notification.notify_on_breach:
             self._notify(f"策略 {strategy_name} 健康熔断：{reason}")
         self._invoke_strategy_method(strategy_name, "stop_strategy")
         self._write_state("strategy_halted")
+
+    def _has_open_position(self, strategy_name: str) -> bool:
+        """Whether a strategy currently holds an open position."""
+        engine: Any
+        for _app_name, engine in self._strategy_engines:
+            strategies: Any = getattr(engine, "strategies", None)
+            if not isinstance(strategies, dict):
+                continue
+            strategy: Any = strategies.get(strategy_name)
+            if strategy is None:
+                continue
+            try:
+                pos: float = float(getattr(strategy, "pos", 0.0))
+            except (TypeError, ValueError):
+                return False
+            return abs(pos) > 0
+        return False
 
     def _resume_strategy(self, strategy_name: str) -> None:
         """Resume one strategy through its engine."""

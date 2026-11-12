@@ -21,9 +21,15 @@ from vnpy.autonomous.runner import (
 from vnpy.autonomous.risk import RiskGuard
 from vnpy.event import EventEngine
 from vnpy.trader.engine import MainEngine
-from vnpy.trader.constant import Direction, Exchange, Offset, OrderType
+from vnpy.trader.constant import Direction, Exchange, Offset, OrderType, Product
 from vnpy.trader.gateway import BaseGateway
-from vnpy.trader.object import CancelRequest, OrderRequest, SubscribeRequest
+from vnpy.trader.object import (
+    CancelRequest,
+    ContractData,
+    OrderRequest,
+    PositionData,
+    SubscribeRequest,
+)
 
 
 GATEWAY_NAME: str = f"{__name__}:FakeGateway"
@@ -434,3 +440,139 @@ def test_snapshot_cumulative_trades_do_not_inflate_health() -> None:
     assert health.trades == 2
     assert health.realized_pnl == -100.0
     assert health.consecutive_losses == 2
+
+
+def test_pause_strategy_flattens_strategy_positions(tmp_path) -> None:
+    """Halting a strategy must also close its open risk, not just stop it."""
+    from types import SimpleNamespace
+
+    config_path = build_config_file(tmp_path)
+    runner = AutonomousRunner.from_config_file(config_path)
+
+    main_engine = MainEngine()
+    try:
+        gateway = main_engine.add_gateway(FakeGateway)
+        assert isinstance(gateway, FakeGateway)
+
+        contract = ContractData(
+            gateway_name="FAKE",
+            symbol="rb2410",
+            exchange=Exchange.SHFE,
+            name="螺纹钢",
+            product=Product.FUTURES,
+            size=10,
+            pricetick=1,
+            min_volume=1,
+            max_volume=100,
+            net_position=False,
+        )
+        from vnpy.event import Event
+        from vnpy.trader.event import EVENT_CONTRACT
+
+        main_engine.event_engine.put(Event(EVENT_CONTRACT, contract))
+        deadline = time.monotonic() + 2
+        while main_engine.get_contract("rb2410.SHFE") is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert main_engine.get_contract("rb2410.SHFE") is not None
+
+        position = PositionData(
+            gateway_name="FAKE",
+            symbol="rb2410",
+            exchange=Exchange.SHFE,
+            direction=Direction.LONG,
+            volume=3,
+            price=3000,
+        )
+        from vnpy.trader.event import EVENT_POSITION
+
+        main_engine.event_engine.put(Event(EVENT_POSITION, position))
+        deadline = time.monotonic() + 2
+        while not main_engine.get_all_positions() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert main_engine.get_all_positions()
+
+        guard = RiskGuard(main_engine, runner.config.risk)
+        guard.install()
+        runner.main_engine = main_engine
+        runner.guard = guard
+        runner.health.register_strategy("trend")
+
+        # A CTA-like engine that reports the trend strategy holding +3.
+        trend_strategy = SimpleNamespace(strategy_name="trend", pos=3, vt_symbol="rb2410.SHFE")
+        other_strategy = SimpleNamespace(strategy_name="other", pos=0, vt_symbol="rb2410.SHFE")
+        fake_engine = SimpleNamespace(
+            close=lambda: None,
+            strategies={"trend": trend_strategy, "other": other_strategy},
+            symbol_strategy_map={"rb2410.SHFE": [trend_strategy, other_strategy]},
+        )
+        main_engine.engines["cta"] = fake_engine
+        runner._strategy_engines = [("CtaStrategy", fake_engine)]
+
+        runner._pause_strategy("trend", "连续亏损达到上限")
+
+        close_orders = [
+            order for order in gateway.orders
+            if order.offset in {Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY}
+        ]
+        # SHFE 平仓会被 OffsetConverter 拆分；拆分前后各做一次风控校验，
+        # 但真正到达网关、属于该策略的平仓单只有一笔。
+        assert close_orders
+        assert all(order.direction == Direction.SHORT for order in close_orders)
+        assert all(order.reference == "CtaStrategy_trend" for order in close_orders)
+        assert sum(order.volume for order in close_orders) == 3
+        assert guard.state.order_count >= len(close_orders)
+    finally:
+        main_engine.close()
+
+
+def test_pause_strategy_without_position_sends_no_close(tmp_path) -> None:
+    """A halted but flat strategy must not generate a stray close order."""
+    from types import SimpleNamespace
+
+    config_path = build_config_file(tmp_path)
+    runner = AutonomousRunner.from_config_file(config_path)
+
+    main_engine = MainEngine()
+    try:
+        gateway = main_engine.add_gateway(FakeGateway)
+        assert isinstance(gateway, FakeGateway)
+
+        from vnpy.event import Event
+        from vnpy.trader.event import EVENT_CONTRACT
+
+        contract = ContractData(
+            gateway_name="FAKE",
+            symbol="rb2410",
+            exchange=Exchange.SHFE,
+            name="螺纹钢",
+            product=Product.FUTURES,
+            size=10,
+            pricetick=1,
+            min_volume=1,
+            max_volume=100,
+            net_position=False,
+        )
+        main_engine.event_engine.put(Event(EVENT_CONTRACT, contract))
+        deadline = time.monotonic() + 2
+        while main_engine.get_contract("rb2410.SHFE") is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        guard = RiskGuard(main_engine, runner.config.risk)
+        guard.install()
+        runner.main_engine = main_engine
+        runner.guard = guard
+
+        flat_strategy = SimpleNamespace(strategy_name="trend", pos=0, vt_symbol="rb2410.SHFE")
+        fake_engine = SimpleNamespace(
+            close=lambda: None,
+            strategies={"trend": flat_strategy},
+            symbol_strategy_map={"rb2410.SHFE": [flat_strategy]},
+        )
+        main_engine.engines["cta"] = fake_engine
+        runner._strategy_engines = [("CtaStrategy", fake_engine)]
+
+        runner._pause_strategy("trend", "连续亏损达到上限")
+
+        assert gateway.orders == []
+    finally:
+        main_engine.close()
