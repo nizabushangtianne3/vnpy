@@ -117,6 +117,17 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_parser.add_argument("--train-bars", type=int, default=0, help="walk-forward 训练段长度")
     portfolio_parser.add_argument("--test-bars", type=int, default=0, help="walk-forward 测试段长度")
     portfolio_parser.add_argument("--output", default="", help="把回测/优化结果写入 JSON 文件")
+    promote_parser: argparse.ArgumentParser = subparsers.add_parser(
+        "promote", help="按晋升门槛判定回测结论，输出候选策略清单"
+    )
+    _add_config_argument(promote_parser)
+    promote_parser.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        help="name=walk_forward.json，可重复；每个 JSON 是一个候选的样本外结论",
+    )
+    promote_parser.add_argument("--output", default="", help="把判定结果写入 JSON 文件")
     sessions_parser: argparse.ArgumentParser = subparsers.add_parser(
         "sessions", help="打印后续交易时段"
     )
@@ -611,6 +622,82 @@ def command_portfolio(args: argparse.Namespace) -> int:
     return verdict
 
 
+def command_promote(args: argparse.Namespace) -> int:
+    """Judge walk-forward verdicts and print the promotion decision."""
+    import json
+
+    from .promotion import (
+        PromotionRules,
+        evaluate_candidate,
+        selected_setting,
+    )
+
+    runs: dict[str, str] = {}
+    for chunk in args.run or []:
+        if "=" not in chunk:
+            print(f"错误：--run 项缺少名称：{chunk}")
+            return 2
+        name, path = chunk.split("=", 1)
+        runs[name.strip()] = path.strip()
+    if not runs:
+        print("错误：至少需要一个 --run name=walk_forward.json")
+        return 2
+
+    try:
+        config = load_config(args.config)
+        rules = PromotionRules.from_dict(config.promotion)
+    except (OSError, ValueError) as exc:
+        print("错误：配置读取失败：" + str(exc))
+        return 2
+
+    reports: list = []
+    for name, path in runs.items():
+        run_path: Path = Path(path)
+        if not run_path.is_file():
+            print(f"错误：回测结论文件不存在 {path}")
+            return 2
+        try:
+            payload: dict = json.loads(run_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"错误：无法解析 {path}：{exc}")
+            return 2
+        report = evaluate_candidate(name, payload, rules)
+        reports.append(report)
+        setting = selected_setting(payload)
+        print(f"[{report.verdict}] {name}")
+        print(
+            f"    样本外 pnl={report.out_pnl:.2f} sharpe={report.out_sharpe:.3f} "
+            f"盈利折叠={report.profitable_fold_ratio:.0%}"
+        )
+        for reason in report.reasons:
+            print(f"    - {reason}")
+        if report.leg_pnls:
+            print("    各品种贡献：" + ", ".join(
+                f"{leg}={value:.2f}" for leg, value in report.leg_pnls.items()
+            ))
+        if report.verdict == "retire":
+            # A retired candidate must not keep trading, so the config entry
+            # is dropped rather than left armed with stale parameters.
+            continue
+        if setting:
+            print("    建议参数：" + ", ".join(f"{k}={v}" for k, v in setting.items()))
+
+    if args.output:
+        output_path: Path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {"reports": [report.summary() for report in reports]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"结果已写入：{output_path}")
+
+    return 0 if any(report.verdict == "promote" for report in reports) else 1
+
+
 def command_optimize(args: argparse.Namespace) -> int:
     """Run the same strategy over a parameter grid and rank the results."""
     try:
@@ -993,6 +1080,7 @@ def main(argv: list[str] | None = None) -> int:
         "backtest": command_backtest,
         "optimize": command_optimize,
         "portfolio": command_portfolio,
+        "promote": command_promote,
         "status": command_status,
     }
     handler = handlers[args.command]

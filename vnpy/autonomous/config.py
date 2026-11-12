@@ -154,6 +154,7 @@ class AutonomousConfig:
     apps: list[str] = field(default_factory=list)
     app_settings: dict[str, dict[str, object]] = field(default_factory=dict)
     calendar: dict[str, object] = field(default_factory=dict)
+    promotion: dict[str, object] = field(default_factory=dict)
     risk: RiskLimits = field(default_factory=RiskLimits)
     health: HealthRules = field(default_factory=HealthRules)
     portfolio: AllocationConfig = field(default_factory=AllocationConfig)
@@ -187,6 +188,7 @@ class AutonomousConfig:
             apps=apps_raw,
             app_settings=_as_nested_dict(data.get("app_settings")),
             calendar=_as_dict(data.get("calendar")),
+            promotion=_as_dict(data.get("promotion")),
             risk=RiskLimits.from_dict(risk_raw),
             health=HealthRules.from_dict(health_raw),
             portfolio=AllocationConfig.from_dict(portfolio_raw),
