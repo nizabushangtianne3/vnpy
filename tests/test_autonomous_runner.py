@@ -3,8 +3,11 @@ import threading
 import time
 from datetime import date, datetime
 
+import pytest
+
 from vnpy.autonomous.config import (
     AutonomousConfig,
+    AllocationConfig,
     RiskLimits,
     RuntimeConfig,
     save_config,
@@ -574,5 +577,104 @@ def test_pause_strategy_without_position_sends_no_close(tmp_path) -> None:
         runner._pause_strategy("trend", "连续亏损达到上限")
 
         assert gateway.orders == []
+    finally:
+        main_engine.close()
+
+
+def test_allocate_capital_writes_targets_to_state(tmp_path) -> None:
+    """The portfolio config must reach a per-strategy number at runtime.
+
+    Recording equity samples without calling allocate() leaves the portfolio
+    config decorative: nothing downstream can size off it.
+    """
+    from types import SimpleNamespace
+
+    config = AutonomousConfig(
+        gateways={GATEWAY_NAME: {}},
+        apps=["CtaStrategy"],
+        portfolio=AllocationConfig(
+            method="equal",
+            max_weight=0.5,
+            min_weight=0.0,
+            cash_fraction=0.0,
+        ),
+    )
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+    runner = AutonomousRunner.from_config_file(str(path))
+
+    main_engine = MainEngine()
+    try:
+        two_strategies: list[SimpleNamespace] = [
+            SimpleNamespace(strategy_name="trend", pos=0, vt_symbol="rb2410.SHFE"),
+            SimpleNamespace(strategy_name="carry", pos=0, vt_symbol="cu2406.SHFE"),
+        ]
+        fake_engine = SimpleNamespace(
+            close=lambda: None,
+            strategies={
+                "trend": two_strategies[0],
+                "carry": two_strategies[1],
+            },
+        )
+        main_engine.engines["cta"] = fake_engine
+        runner.main_engine = main_engine
+        runner._strategy_engines = [("CtaStrategy", fake_engine)]
+
+        # One live account with 100k equity, no cash reserve, 2 strategies
+        # capped at 0.5 each: the cap cannot hold the whole mass, so each
+        # lands at the cap and the remainder stays unallocated.
+        from vnpy.event import Event
+        from vnpy.trader.event import EVENT_ACCOUNT
+        from vnpy.trader.object import AccountData
+
+        main_engine.event_engine.put(
+            Event(
+                EVENT_ACCOUNT,
+                AccountData(
+                    gateway_name="FAKE",
+                    accountid="demo",
+                    balance=100000.0,
+                    frozen=0,
+                ),
+            )
+        )
+        deadline = time.monotonic() + 2
+        while not main_engine.get_all_accounts() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert main_engine.get_all_accounts()
+
+        runner._allocate_capital()
+
+        assert set(runner._allocation) == {"trend", "carry"}
+        assert runner._allocation["trend"] == pytest.approx(50000.0, abs=0.01)
+        assert runner._allocation["carry"] == pytest.approx(50000.0, abs=0.01)
+
+        payload = runner._state_payload("trading")
+        assert payload["allocation"] == runner._allocation
+    finally:
+        main_engine.close()
+
+
+def test_allocate_capital_needs_account_and_strategy(tmp_path) -> None:
+    """No equity or no strategy means no allocation, and no crash."""
+    config = AutonomousConfig(gateways={GATEWAY_NAME: {}})
+    path = tmp_path / "autonomous.json"
+    save_config(config, path)
+    runner = AutonomousRunner.from_config_file(str(path))
+
+    main_engine = MainEngine()
+    try:
+        runner.main_engine = main_engine
+        runner._strategy_engines = []
+        runner._allocate_capital()
+        assert runner._allocation == {}
+
+        from types import SimpleNamespace
+
+        fake_engine = SimpleNamespace(close=lambda: None, strategies={})
+        main_engine.engines["cta"] = fake_engine
+        runner._strategy_engines = [("CtaStrategy", fake_engine)]
+        runner._allocate_capital()
+        assert runner._allocation == {}
     finally:
         main_engine.close()

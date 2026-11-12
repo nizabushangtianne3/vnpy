@@ -121,6 +121,8 @@ python examples/autonomous/run.py run --config .vntrader/autonomous.json
 
 `.vntrader/autonomous_state.json` 原子更新，内容包括：进程角色、模式、当前时段、距下次开盘时间、风控快照、各策略健康度、资金分配、成交台账、各网关最近事件时间。外部值守脚本（如看门狗、大屏）可直接读取。
 
+其中 `allocation` 是运行中实时算出的各策略目标资金（账户权益乘权重、留出现金后的数值），策略可据此决定开仓手数；账户未推送余额或没有任何策略时该字段为空，不会用错误基数算出虚假目标。
+
 不写脚本也能看：`python -m vnpy.autonomous status` 输出一行摘要（pid、模式、状态、时段、运行时长、心跳年龄、重启次数、策略数、风控是否已武装、健康是否熔断），加 `--follow` 每秒刷新。
 
 ## 回测验收：先证明策略能赚钱再上实盘

@@ -228,6 +228,7 @@ class AutonomousRunner:
         self.guard: RiskGuard | None = None
         self.health: HealthMonitor = HealthMonitor(config.health)
         self.allocator: CapitalAllocator = CapitalAllocator(config.portfolio)
+        self._allocation: dict[str, float] = {}
         self.ledger: TradeLedger = TradeLedger()
         self._last_parent_state: str = ""
         self._last_restart_limit_notice: datetime | None = None
@@ -536,6 +537,7 @@ class AutonomousRunner:
             self._heartbeat(now)
             self._check_watchdog(now)
             self._publish_strategy_snapshots()
+            self._allocate_capital()
 
             time.sleep(poll)
 
@@ -765,6 +767,70 @@ class AutonomousRunner:
                     publish()
                 except Exception as exc:   # noqa: BLE001
                     logger.warning("[autonomous] 策略快照发布失败：%s", exc)
+
+    def _allocate_capital(self) -> None:
+        """Turn account equity into per-strategy target capital.
+
+        Without this the allocator only collects equity samples and the
+        portfolio config never reaches a number a strategy could size off.
+        The account equity comes from the live gateway; the strategy list
+        comes from the engine so only running strategies get a target.
+        """
+        main_engine: MainEngine | None = self.main_engine
+        if main_engine is None:
+            return
+
+        strategies: list[str] = self._strategy_names()
+        if not strategies:
+            self._allocation = {}
+            return
+
+        equity: float = self._account_equity(main_engine)
+        if equity <= 0:
+            return
+
+        try:
+            allocation: dict[str, float] = self.allocator.allocate(equity, strategies)
+        except Exception as exc:   # noqa: BLE001
+            logger.warning("[autonomous] 资金分配计算失败：%s", exc)
+            return
+
+        self._allocation = allocation
+
+    def _account_equity(self, main_engine: MainEngine) -> float:
+        """Sum the balance of every live account, or 0 when unknown."""
+        get_accounts: Any = getattr(main_engine, "get_all_accounts", None)
+        if not callable(get_accounts):
+            return 0.0
+
+        try:
+            accounts = get_accounts()
+        except Exception:   # noqa: BLE001
+            return 0.0
+
+        balances: list[float] = []
+        account: Any
+        for account in accounts:
+            balance: Any = getattr(account, "balance", 0.0)
+            try:
+                balances.append(float(balance))
+            except (TypeError, ValueError):
+                continue
+        return sum(balances) if balances else 0.0
+
+    def _strategy_names(self) -> list[str]:
+        """Names of the strategies the strategy engines currently hold."""
+        names: list[str] = []
+        engine: Any
+        for _app_name, engine in self._strategy_engines:
+            strategies: Any = getattr(engine, "strategies", None)
+            if not isinstance(strategies, dict):
+                continue
+            name: str
+            for name in strategies:
+                if name not in names:
+                    names.append(str(name))
+        return names
 
     def _require_event_engine(self) -> EventEngine:
         """Return the live event engine or raise."""
@@ -1058,6 +1124,7 @@ class AutonomousRunner:
             payload["guard"] = self.guard.snapshot()
         payload["health"] = self.health.snapshot()
         payload["portfolio"] = self.allocator.snapshot()
+        payload["allocation"] = dict(self._allocation)
         payload["ledger"] = dict(self.ledger.trades)
         payload["strategy_engines"] = len(self._strategy_engines)
         payload["gateway_last_event"] = {
