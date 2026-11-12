@@ -766,3 +766,102 @@ def test_atr_stop_stays_quiet_when_the_bar_misses_it() -> None:
 
     strategy.on_bar(soft_bar)
     assert engine.pending == []
+
+
+def test_trailing_stop_tightens_with_the_position_extreme() -> None:
+    """A trailing stop anchors on the best price the position has seen.
+
+    The static stop sits a fixed distance under the entry cost, so a trend
+    that runs hands most of the move back before the exit fires. The trail
+    tracks the extreme instead, and the tighter of the two levels wins.
+    """
+    strategy = _long_position_in_a_rally()
+    strategy.trail_stop = 1.0
+    engine: _BacktestEngineStub = strategy.cta_engine
+    engine.pending.clear()
+
+    # Run the extreme far above the entry while the static stop stays put.
+    push_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 32), 110.0, 112.0, 109.0, 111.0
+    )
+    strategy.on_bar(push_bar)
+    assert strategy.pos > 0
+    assert strategy.pos_extreme >= 111.0
+
+    static_stop: float = (
+        strategy.avg_cost - strategy.stop_atr * strategy.atr_value
+    )
+    armed: float = max(
+        static_stop, strategy.pos_extreme - strategy.trail_stop * strategy.atr_value
+    )
+    assert armed > static_stop
+
+    # A pullback that leaves the static stop untouched still trips the trail.
+    engine.pending.clear()
+    dip_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 33), 110.0, 110.5, armed - 1.0, 110.0
+    )
+    strategy.on_bar(dip_bar)
+    assert len(engine.pending) == 1
+    direction, offset, price, volume = engine.pending[0]
+    assert direction is Direction.SHORT
+    assert offset is Offset.CLOSE
+    assert dip_bar.low_price <= armed
+    assert armed > static_stop
+
+
+def test_trailing_stop_resets_after_the_position_goes_flat() -> None:
+    """The anchor belongs to one position, not to the whole run."""
+    strategy = _long_position_in_a_rally()
+    strategy.trail_stop = 1.0
+
+    push_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 32), 110.0, 112.0, 109.0, 111.0
+    )
+    strategy.on_bar(push_bar)
+    assert strategy.pos > 0
+    assert strategy.pos_extreme > 0
+
+    stop_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 33), 100.0, 100.5, 90.0, 91.0
+    )
+    strategy.on_bar(stop_bar)
+    # The exit is queued during this bar and crossed on the next one.
+    engine: _BacktestEngineStub = strategy.cta_engine
+    queued_price: float = engine.pending[0][2]
+    settle_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 34), queued_price, queued_price + 0.5,
+        queued_price - 1.0, queued_price - 0.5
+    )
+    engine.next_bar = settle_bar
+    for trade in engine.fill_pending(strategy):
+        strategy.on_trade(trade)
+        # The replay loop owns position bookkeeping; the callbacks only
+        # consume cost and pnl.
+        if trade.direction is Direction.SHORT:
+            strategy.pos -= trade.volume
+        else:
+            strategy.pos += trade.volume
+    assert strategy.pos == 0
+
+    # The next bar after going flat must not carry the old anchor forward.
+    strategy.on_bar(settle_bar)
+    assert strategy.pos_extreme == 0.0
+
+
+def test_zero_trail_keeps_the_static_stop_level() -> None:
+    """The default must leave the armed stop where the entry put it."""
+    strategy = _long_position_in_a_rally()
+    assert strategy.trail_stop == 0.0
+
+    push_bar: BarData = build_bar(
+        datetime(2024, 1, 2, 9, 32), 110.0, 112.0, 109.0, 111.0
+    )
+    strategy.on_bar(push_bar)
+    assert strategy.pos_extreme > 0
+
+    static_stop: float = (
+        strategy.avg_cost - strategy.stop_atr * strategy.atr_value
+    )
+    # With the trail disabled the extreme is tracked but never used.
+    assert strategy.pos_extreme > static_stop

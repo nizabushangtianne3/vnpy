@@ -40,6 +40,7 @@ class AutonomousTrendStrategy(CtaTemplate):
     stop_atr: float = 2.0
     fixed_size: int = 1
     max_position: int = 5
+    trail_stop: float = 0.0
 
     fast_ma0: float = 0.0
     fast_ma1: float = 0.0
@@ -47,6 +48,7 @@ class AutonomousTrendStrategy(CtaTemplate):
     slow_ma1: float = 0.0
     atr_value: float = 0.0
     avg_cost: float = 0.0
+    pos_extreme: float = 0.0
     last_price: float = 0.0
     realized_pnl: float = 0.0
     equity: float = 0.0
@@ -58,12 +60,14 @@ class AutonomousTrendStrategy(CtaTemplate):
         "stop_atr",
         "fixed_size",
         "max_position",
+        "trail_stop",
     ]
     variables = [
         "fast_ma0",
         "slow_ma0",
         "atr_value",
         "avg_cost",
+        "pos_extreme",
         "last_price",
         "realized_pnl",
         "equity",
@@ -103,6 +107,7 @@ class AutonomousTrendStrategy(CtaTemplate):
             return
 
         self.last_price = bar.close_price
+        self._extend_extreme(bar)
 
         fast_ma: np.ndarray = am.sma(self.fast_window, array=True)
         slow_ma: np.ndarray = am.sma(self.slow_window, array=True)
@@ -128,12 +133,20 @@ class AutonomousTrendStrategy(CtaTemplate):
         # hides exactly the drawdowns the stop exists to cut.
         if self.pos > 0 and self.avg_cost > 0:
             stop_price: float = self.avg_cost - self.stop_atr * self.atr_value
+            if self.trail_stop > 0 and self.pos_extreme > 0:
+                trail: float = self.pos_extreme - self.trail_stop * self.atr_value
+                if trail > stop_price:
+                    stop_price = trail
             if bar.low_price <= stop_price:
                 self.sell(max(stop_price, bar.open_price), self.pos)
                 self.put_event()
                 return
         if self.pos < 0 and self.avg_cost > 0:
             stop_price = self.avg_cost + self.stop_atr * self.atr_value
+            if self.trail_stop > 0 and self.pos_extreme > 0:
+                trail = self.pos_extreme + self.trail_stop * self.atr_value
+                if trail < stop_price:
+                    stop_price = trail
             if bar.high_price >= stop_price:
                 self.cover(min(stop_price, bar.open_price), -self.pos)
                 self.put_event()
@@ -175,6 +188,25 @@ class AutonomousTrendStrategy(CtaTemplate):
         """Track nothing on local stop order updates."""
         return
 
+    def _extend_extreme(self, bar: BarData) -> None:
+        """Track the best price the open position has seen.
+
+        A trailing stop anchors on the extreme rather than the entry
+        cost, so it ratchets as the trend runs instead of staying
+        parked at the first fill. Flat positions reset the anchor.
+        """
+        if self.pos == 0:
+            self.pos_extreme = 0.0
+            return
+        price: float = bar.high_price if self.pos > 0 else bar.low_price
+        if self.pos_extreme == 0:
+            self.pos_extreme = price
+        elif self.pos > 0:
+            self.pos_extreme = max(self.pos_extreme, price)
+        else:
+            self.pos_extreme = min(self.pos_extreme, price)
+
+
     def _open_volume(self, direction: int) -> float:
         """Volume that keeps the projected net position inside the cap."""
         room: float
@@ -203,6 +235,8 @@ class AutonomousTrendStrategy(CtaTemplate):
             else:
                 pos_before_abs = -pos_after - volume
             total_abs: float = abs(pos_after)
+            if pos_after == 0:
+                self.pos_extreme = 0.0
             if total_abs > 0:
                 self.avg_cost = (
                     self.avg_cost * pos_before_abs + price * volume
