@@ -126,6 +126,7 @@ def test_limit_order_crosses_only_when_the_bar_reaches_it() -> None:
 
 
 def test_slippage_moves_the_fill_against_the_trader() -> None:
+    """Slippage is a cost, not a fill-price adjustment."""
     engine: _BacktestEngineStub = _BacktestEngineStub(
         BacktestSettings(slippage=1.5), "rb9999.SHFE"
     )
@@ -140,8 +141,63 @@ def test_slippage_moves_the_fill_against_the_trader() -> None:
 
     longs: list[TradeData] = [t for t in filled if t.direction is Direction.LONG]
     shorts: list[TradeData] = [t for t in filled if t.direction is Direction.SHORT]
-    assert longs[0].price == pytest.approx(101.5)
-    assert shorts[0].price == pytest.approx(98.5)
+    assert longs[0].price == pytest.approx(100.0)
+    assert shorts[0].price == pytest.approx(100.0)
+
+
+def test_fill_price_respects_limit_across_a_gap() -> None:
+    """A limit never fills beyond its price when the bar gaps through it."""
+    engine: _BacktestEngineStub = _BacktestEngineStub(BacktestSettings(), "rb9999.SHFE")
+
+    strategy = load_strategy_class()(
+        cta_engine=None, strategy_name="bt", vt_symbol="rb9999.SHFE", setting={}
+    )
+    # Buy limit 100, next bar opens 110: official model fills at 100.
+    engine.send_order(strategy, Direction.LONG, Offset.OPEN, 100.0, 1)
+    engine.next_bar = build_bar(datetime(2024, 1, 2, 9, 0), 110.0, 115.0, 95.0, 112.0)
+    longs = engine.fill_pending(strategy)
+    assert len(longs) == 1
+    assert longs[0].price == pytest.approx(100.0)
+
+    # Sell limit 100, next bar gaps up to 102: official model fills at 102.
+    engine.send_order(strategy, Direction.SHORT, Offset.OPEN, 100.0, 1)
+    engine.next_bar = build_bar(datetime(2024, 1, 2, 9, 1), 102.0, 105.0, 90.0, 98.0)
+    shorts = engine.fill_pending(strategy)
+    assert len(shorts) == 1
+    assert shorts[0].price == pytest.approx(102.0)
+
+    # Sell limit 105, next bar opens 95: fill at the limit, not the open.
+    engine.send_order(strategy, Direction.SHORT, Offset.OPEN, 105.0, 1)
+    engine.next_bar = build_bar(datetime(2024, 1, 2, 9, 2), 95.0, 106.0, 90.0, 98.0)
+    shorts = engine.fill_pending(strategy)
+    assert len(shorts) == 1
+    assert shorts[0].price == pytest.approx(105.0)
+
+
+def test_commission_uses_contract_multiplier() -> None:
+    """Cost must be turnover based (price x volume x size), not tick based."""
+    strategy = load_strategy_class()(
+        cta_engine=None, strategy_name="bt", vt_symbol="rb9999.SHFE", setting={}
+    )
+    from vnpy.autonomous.backtest import _apply_position_and_cost
+
+    _apply_position_and_cost(
+        strategy,
+        TradeData(
+            gateway_name="FAKE",
+            symbol="rb",
+            exchange=Exchange.SHFE,
+            orderid="1",
+            tradeid="1",
+            direction=Direction.LONG,
+            offset=Offset.OPEN,
+            price=3000.0,
+            volume=2,
+        ),
+        BacktestSettings(rate=0.0001, size=10, slippage=0.0),
+    )
+    expected: float = 3000.0 * 2 * 0.0001 * 10
+    assert strategy.realized_pnl == pytest.approx(-expected)
 
 
 def test_position_follows_direction_not_offset() -> None:
@@ -206,6 +262,38 @@ def test_run_backtest_produces_a_consistent_ledger() -> None:
     assert result.open_position == pytest.approx(strategy.pos)
     assert 0.0 <= result.win_rate <= 1.0
     assert result.max_drawdown >= 0.0
+
+
+def test_winning_round_trips_pair_by_entry_direction() -> None:
+    """A long close exits a short entry, so pairing must invert the direction."""
+    from vnpy.autonomous.backtest import _count_winning_round_trips
+
+    def trade(tradeid: str, direction: Direction, offset: Offset, price: float) -> TradeData:
+        return TradeData(
+            gateway_name="FAKE",
+            symbol="rb",
+            exchange=Exchange.SHFE,
+            orderid=tradeid,
+            tradeid=tradeid,
+            direction=direction,
+            offset=offset,
+            price=price,
+            volume=1,
+        )
+
+    # Short 100 -> cover 90 is a winning round trip.
+    trades: list[TradeData] = [
+        trade("1", Direction.SHORT, Offset.OPEN, 100.0),
+        trade("2", Direction.LONG, Offset.CLOSE, 90.0),
+    ]
+    assert _count_winning_round_trips(trades) == 1
+
+    # Short 100 -> cover 110 is a losing round trip.
+    losing: list[TradeData] = [
+        trade("3", Direction.SHORT, Offset.OPEN, 100.0),
+        trade("4", Direction.LONG, Offset.CLOSE, 110.0),
+    ]
+    assert _count_winning_round_trips(losing) == 0
 
 
 def test_cost_basis_resets_after_a_flat() -> None:

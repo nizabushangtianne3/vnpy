@@ -15,8 +15,10 @@ generator, or a database query with no extra dependencies.
 
 Execution model mirrors vnpy_ctastrategy.backtesting: a limit order placed on
 bar N is crossed against bar N+1 only when that bar traded through the limit,
-and it fills at the bar open. Without that one-bar lag a trend strategy looks
-profitable purely because it saw prices that were not yet knowable.
+and the fill price is the better of the limit price and the bar open. Slippage
+is charged per contract as a separate cost, exactly like the official daily
+pnl accounting. Without the one-bar lag a trend strategy looks profitable
+purely because it saw prices that were not yet knowable.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from typing import Any
 
 from vnpy.trader.constant import Direction, Exchange, Interval, Offset
 from vnpy.trader.object import BarData, TradeData
+from vnpy.trader.utility import round_to
 
 
 def _import_cta_types() -> tuple[Any, Any]:
@@ -57,7 +60,7 @@ class BacktestSettings:
 
     slippage: float = 0.0
     rate: float = 0.0
-    size: int = 10
+    size: float = 10
     capital: float = 1_000_000.0
     pricetick: float = 0.2
 
@@ -127,7 +130,7 @@ class _BacktestEngineStub:
         """Return the contract price tick."""
         return self.settings.pricetick
 
-    def get_size(self, strategy: Any) -> int:
+    def get_size(self, strategy: Any) -> float:
         """Return the contract multiplier."""
         return self.settings.size
 
@@ -170,11 +173,13 @@ class _BacktestEngineStub:
 
         The strategy author picks the price, typically ``bar.close_price``.
         That price is a limit, not a guarantee: the next bar only fills it when
-        the market actually traded through it.
+        the market actually traded through it. Prices are rounded to the
+        contract tick before queuing, as the official backtester does.
         """
         if volume <= 0:
             return []
 
+        price = round_to(price, self.settings.pricetick)
         self._order_seq += 1
         vt_orderid: str = f"bt_{self._order_seq}"
         self.pending.append((direction, offset, price, volume))
@@ -189,9 +194,11 @@ class _BacktestEngineStub:
         """Cross live limit orders against the current bar.
 
         Mirrors vnpy_ctastrategy.backtesting: a long limit fills when its price
-        reaches the bar low, a short when it reaches the bar high, and the fill
-        takes the bar open. Slippage pushes the fill the wrong way for the
-        trader, which is the only honest way to model it.
+        reaches the bar low, a short when it reaches the bar high. The fill
+        price is ``min(limit, open)`` for buys and ``max(limit, open)`` for
+        sells, so a gap always fills at the better price and an order never
+        fills beyond its limit. Slippage is not baked into the fill price;
+        it is charged per contract with the commission.
         """
         if self.next_bar is None or not self.pending:
             return []
@@ -204,10 +211,10 @@ class _BacktestEngineStub:
         for direction, offset, price, volume in queued:
             if direction is Direction.LONG:
                 crossed: bool = price >= bar.low_price > 0
-                fill_price: float = bar.open_price + self.settings.slippage
+                fill_price: float = min(price, bar.open_price)
             else:
                 crossed = price <= bar.high_price and bar.high_price > 0
-                fill_price = bar.open_price - self.settings.slippage
+                fill_price = max(price, bar.open_price)
 
             if not crossed:
                 continue
@@ -301,7 +308,12 @@ def _apply_position_and_cost(
 
     # CtaTemplate does not model commissions, so deduction happens here and is
     # folded into the strategy's realized pnl field when it publishes one.
-    cost: float = trade.price * trade.volume * settings.rate
+    # Mirrors the official DailyResult accounting: commission on turnover
+    # (price x volume x size x rate) plus per-contract slippage cost.
+    cost: float = (
+        trade.price * trade.volume * settings.rate
+        + trade.volume * settings.slippage
+    ) * settings.size
     if cost and hasattr(strategy, "realized_pnl"):
         strategy.realized_pnl -= cost
 
@@ -362,12 +374,19 @@ def _count_winning_round_trips(trades: list[TradeData]) -> int:
         closing_direction: Direction | None = trade.direction
         if closing_direction is None:
             continue
-        matches: list[TradeData] = open_trades.get(closing_direction, [])
+        # A close carries the exit direction, so a SHORT exit belongs to a
+        # LONG entry and a LONG exit (cover) belongs to a SHORT entry.
+        # Matching by the closing direction itself pairs the opposite round
+        # trip and silently corrupts the win rate.
+        entry_direction: Direction = (
+            Direction.SHORT if closing_direction is Direction.LONG else Direction.LONG
+        )
+        matches: list[TradeData] = open_trades.get(entry_direction, [])
         if not matches:
             continue
 
         entry: TradeData = matches.pop(0)
-        if entry.direction is Direction.LONG:
+        if entry_direction is Direction.LONG:
             pnl: float = (trade.price - entry.price) * trade.volume
         else:
             pnl = (entry.price - trade.price) * trade.volume
