@@ -321,3 +321,13 @@ python -m vnpy.autonomous promote --run "m9999.DCE=m_wf.json" --run "rb9999.SHFE
 `promote` 的候选用命令输出的「建议参数」填 `app_settings.CtaStrategy.strategies[].setting`——那是每折真正被验证过的那一组，不是整个网格；`retire` 的候选要从配置里摘掉，不能让带着过期参数的东西继续跑。
 
 13 个真实品种用同一套网格与同一套 walk-forward 口径筛过之后，只有豆粕在两种窗口切分下都通过全部门槛（训练 1400 / 样本外 700：样本外 +320510.95、4/4 折盈利、夏普 0.685；训练 900 / 样本外 450：样本外 +269143.40、8/8 折盈利、夏普 0.675）。其余品种要么样本外盈亏为负，要么样本外夏普留不到样本内的一半。详细数据见 CHANGELOG「品种扩展与样本外复核」。
+
+实盘前核对行情，用 `quotes` 把配置里装配的标的到交易所盛商那边拉一次快照：
+
+```bash
+python -m vnpy.autonomous quotes                                    # 读配置的 strategies
+python -m vnpy.autonomous quotes --symbol 600519 --symbol 601318    # 指定代码
+python -m vnpy.autonomous quotes --symbol 600519 --json             # 机器可读
+```
+
+不带 `--symbol` 时读 `app_settings.CtaStrategy.strategies` 的 `vt_symbol`，正是 `promote --apply` 写回的那批条目，因此能直接用来做上盘前核对。这个命令只拉行情，不下单，也不把快照当成成交回报。
