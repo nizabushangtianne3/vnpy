@@ -10,6 +10,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable
 from datetime import datetime
@@ -71,12 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     optimize_parser.add_argument("--end", default="", help="数据库结束时间")
     optimize_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
     optimize_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
-    optimize_parser.add_argument("--size", type=int, default=10, help="合约乘数")
+    optimize_parser.add_argument("--size", type=float, default=10, help="合约乘数")
     optimize_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
     optimize_parser.add_argument("--bars", type=int, default=300, help="合成K线数量")
     optimize_parser.add_argument("--seed", type=int, default=7, help="随机种子")
     optimize_parser.add_argument("--train-bars", type=int, default=0, help="walk-forward 训练段长度，设置后启用样本外验证")
     optimize_parser.add_argument("--test-bars", type=int, default=0, help="walk-forward 测试段长度，设置后启用样本外验证")
+    optimize_parser.add_argument("--output", default="", help="把回测/优化结果写入 JSON 文件")
     backtest_parser: argparse.ArgumentParser = subparsers.add_parser(
         "backtest", help="离线回测一个策略并输出绩效"
     )
@@ -93,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--end", default="", help="结束时间，仅数据库数据源使用")
     backtest_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
     backtest_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
-    backtest_parser.add_argument("--size", type=int, default=10, help="合约倍数")
+    backtest_parser.add_argument("--size", type=float, default=10, help="合约乘数")
     backtest_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
     sessions_parser: argparse.ArgumentParser = subparsers.add_parser(
         "sessions", help="打印后续交易时段"
@@ -516,6 +518,29 @@ def command_optimize(args: argparse.Namespace) -> int:
         aggregate_test_sharpe: float = (
             sum(r["test_sharpe"] for r in fold_results) /len(fold_results)
         )
+
+        def _write_walk_forward_output() -> None:
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(
+                    {
+                        "data_bars": len(bars),
+                        "train_bars": args.train_bars,
+                        "test_bars": args.test_bars,
+                        "folds": fold_results,
+                        "aggregate_train_pnl": aggregate_train,
+                        "aggregate_test_pnl": aggregate_test,
+                        "aggregate_train_sharpe": aggregate_train_sharpe,
+                        "aggregate_test_sharpe": aggregate_test_sharpe,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            print(f"结果已写入：{output}")
+
         print(
             f"\n样本内合计 pnl={aggregate_train:.2f}, avg_sharpe={aggregate_train_sharpe:.3f}"
         )
@@ -524,12 +549,31 @@ def command_optimize(args: argparse.Namespace) -> int:
         )
         if aggregate_test <= 0:
             print("结论：样本外未取得正期望，参数不稳定或策略无边际。")
+            if args.output:
+                _write_walk_forward_output()
             return 1
         if aggregate_test_sharpe < aggregate_train_sharpe * 0.5:
             print("结论：样本外表现显著劣于样本内，存在过拟合风险，不建议启用。")
+            if args.output:
+                _write_walk_forward_output()
             return 1
         print("结论：样本外表现与样本内一致，参数相对稳定。")
+        if args.output:
+            _write_walk_forward_output()
         return 0
+
+    if args.output:
+        output_path: Path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, object] = {
+            "data_bars": len(bars),
+            "results": rows,
+            "best": best,
+        }
+        output_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"结果已写入：{output_path}")
 
     if not rows:
         print("错误：没有可用的回测结果")

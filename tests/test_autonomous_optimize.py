@@ -8,6 +8,7 @@ running one configuration, and the output table must order by Sharpe.
 import subprocess
 import sys
 from pathlib import Path
+import json
 
 
 import pytest
@@ -44,6 +45,88 @@ def test_parse_grid_rejects_missing_equals() -> None:
 def test_parse_grid_rejects_empty_value_list() -> None:
     with pytest.raises(ValueError, match="可用取值"):
         _parse_grid("fast_window=")
+
+
+def test_optimize_cli_writes_json_output(tmp_path: Path) -> None:
+    """The scan is only useful if the machine can consume its ranking."""
+    import os
+
+    output_file = tmp_path / "optimize_result.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-m",
+            "vnpy.autonomous",
+            "optimize",
+            "--grid",
+            "fast_window=5,10;slow_window=20",
+            "--bars",
+            "120",
+            "--output",
+            str(output_file),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+        timeout=180,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    combined: str = result.stdout + result.stderr
+    assert f"结果已写入：{output_file}" in combined, combined
+    assert output_file.is_file(), combined
+    payload: dict = json.loads(output_file.read_text(encoding="utf-8"))
+    assert payload["data_bars"] == 120
+    results: list[dict] = payload["results"]
+    assert len(results) == 2
+    assert {"total_pnl", "sharpe", "params"} <= set(results[0])
+    assert payload["best"]["params"] == results[0]["params"]
+
+
+def test_optimize_cli_writes_walk_forward_output(tmp_path: Path) -> None:
+    """Walk-forward output must include the verdict inputs for automation."""
+    import os
+
+    output_file = tmp_path / "walk_forward_result.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            "-m",
+            "vnpy.autonomous",
+            "optimize",
+            "--grid",
+            "fast_window=5,10;slow_window=20,40",
+            "--bars",
+            "400",
+            "--train-bars",
+            "150",
+            "--test-bars",
+            "50",
+            "--output",
+            str(output_file),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+        timeout=180,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    combined: str = result.stdout + result.stderr
+    assert f"结果已写入：{output_file}" in combined, combined
+    assert output_file.is_file(), combined
+    payload: dict = json.loads(output_file.read_text(encoding="utf-8"))
+    assert payload["train_bars"] == 150
+    assert payload["test_bars"] == 50
+    folds: list[dict] = payload["folds"]
+    assert folds
+    assert {"fold", "best_params", "test_pnl", "test_sharpe"} <= set(folds[0])
 
 
 def test_optimize_cli_runs_and_prints_ranking() -> None:
