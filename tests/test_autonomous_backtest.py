@@ -9,6 +9,7 @@ looked like an edge.
 """
 
 import importlib.util
+import warnings
 from typing import Any
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -525,6 +526,68 @@ def test_load_bars_from_csv_accepts_space_separated_rows(tmp_path: Path) -> None
 def test_load_bars_from_csv_rejects_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_bars_from_csv(str(tmp_path / "absent.csv"), "rb2410")
+
+
+def test_load_bars_from_csv_drops_a_unit_break(tmp_path: Path) -> None:
+    """A block in a different price unit must not become a huge real move.
+
+    A feed once delivered a batch of minute bars in an unmarked different
+    scale, and a strategy read the glitch as a real price jump: the backtest
+    booked pnl from a move that never happened on the exchange.
+    """
+    path: Path = tmp_path / "rb_unit_break.csv"
+    base: datetime = datetime(2024, 1, 2, 9, 0)
+    lines: list[str] = ["datetime,open_price,high_price,low_price,close_price,volume"]
+
+    # Ten ordinary bars, then a block whose prices are ~3800 times larger,
+    # then ten ordinary bars again. Only the ordinary ones survive.
+    for index in range(10):
+        price: float = 3000.0 + index
+        lines.append(
+            f"{(base + timedelta(minutes=index)).isoformat(sep=' ')},"
+            f"{price},{price + 2},{price - 2},{price},100"
+        )
+    for index in range(10, 20):
+        price: float = 3000.0 + index
+        scaled: float = price * 3830.0
+        lines.append(
+            f"{(base + timedelta(minutes=index)).isoformat(sep=' ')},"
+            f"{scaled},{scaled + 2},{scaled - 2},{scaled},100"
+        )
+    for index in range(20, 30):
+        price: float = 3000.0 + index
+        lines.append(
+            f"{(base + timedelta(minutes=index)).isoformat(sep=' ')},"
+            f"{price},{price + 2},{price - 2},{price},100"
+        )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="标度"):
+        bars = load_bars_from_csv(str(path), "rb2410")
+
+    assert len(bars) == 20
+    assert all(bar.close_price < 10000.0 for bar in bars)
+
+
+def test_load_bars_from_csv_keeps_normal_range_moves(tmp_path: Path) -> None:
+    """A 3830x jump is a glitch; a 10% move is not, and must survive."""
+    path: Path = tmp_path / "rb_normal.csv"
+    base: datetime = datetime(2024, 1, 2, 9, 0)
+    lines: list[str] = ["datetime,open_price,high_price,low_price,close_price,volume"]
+
+    closes = [3000.0, 3300.0, 2700.0, 3010.0, 2990.0]
+    for index, close in enumerate(closes):
+        lines.append(
+            f"{(base + timedelta(minutes=index)).isoformat(sep=' ')},"
+            f"{close},{close + 2},{close - 2},{close},100"
+        )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        bars = load_bars_from_csv(str(path), "rb2410")
+
+    assert len(bars) == len(closes)
 
 
 def test_load_bars_from_csv_rejects_bad_header(tmp_path: Path) -> None:

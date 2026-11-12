@@ -33,6 +33,11 @@ from vnpy.trader.constant import Direction, Exchange, Interval, Offset
 from vnpy.trader.object import BarData, TradeData
 from vnpy.trader.utility import round_to
 
+# A bar-to-bar price jump above this multiple is a unit break in the source
+# file, not a market move: no listed instrument reprices that far between
+# consecutive bars, and replaying the jump fabricates pnl out of the glitch.
+MAX_PRICE_JUMP: float = 50.0
+
 
 def _import_cta_types() -> tuple[Any, Any]:
     """Import the CTA template lazily, the way runner.py resolves app classes.
@@ -587,6 +592,8 @@ def load_bars_from_csv(
         raise FileNotFoundError(f"K线文件不存在：{path}")
 
     bars: list[BarData] = []
+    anchor_price: float = 0.0
+    dropped: int = 0
     with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
         # Real exports mix separators: a comma header over space data is
         # common. Parse each line by its own delimiter rather than trusting
@@ -612,6 +619,19 @@ def load_bars_from_csv(
             close_price: float = float(row["close_price"])
             volume: float = float(row.get("volume") or 0.0)
 
+            # Anchor on the first price seen, then flag every bar whose price
+            # sits a different order of magnitude away from that anchor. An
+            # unmarked unit change in the middle of a file is the shape this
+            # catches, and the anchor is what keeps the earlier (correct) block
+            # from being discarded in favour of a later glitch.
+            if anchor_price > 0 and close_price > 0:
+                scale: float = close_price / anchor_price
+                if scale > MAX_PRICE_JUMP or scale < 1.0 / MAX_PRICE_JUMP:
+                    dropped += 1
+                    continue
+            elif close_price > 0:
+                anchor_price = close_price
+
             bars.append(
                 BarData(
                     symbol=symbol,
@@ -629,7 +649,20 @@ def load_bars_from_csv(
             )
 
     if not bars:
-        raise ValueError(f"CSV 中没有可用的K线：{path}")
+        raise ValueError(
+            f"CSV 中没有可用的K线：{path}；已因价格标度突变丢弃 {dropped} 行"
+        )
+
+    if dropped:
+        # Continuing silently would backtest a series that no longer matches
+        # the file the caller pointed at, and the gap would read as data.
+        import warnings
+
+        warnings.warn(
+            f"{path} 丢弃了 {dropped} 行价格标度突变的K线，"
+            "回测行情与文件原始内容已不一致",
+            stacklevel=2,
+        )
     return bars
 
 
