@@ -28,6 +28,7 @@ from vnpy.autonomous.backtest import (
     annual_sharpe,
     _BacktestEngineStub,
     build_bar,
+    profit_factor,
     run_backtest,
 )
 
@@ -404,6 +405,89 @@ def test_empty_bar_series_is_rejected() -> None:
     )
     with pytest.raises(ValueError):
         run_backtest(strategy, [], BacktestSettings())
+
+
+def _fills(rows: list[tuple[str, Direction, Offset, float]]) -> list[TradeData]:
+    """Build fills from (tradeid, direction, offset, price) rows."""
+    return [
+        TradeData(
+            gateway_name="FAKE",
+            symbol="rb",
+            exchange=Exchange.SHFE,
+            orderid=tradeid,
+            tradeid=tradeid,
+            direction=direction,
+            offset=offset,
+            price=price,
+            volume=1,
+        )
+        for tradeid, direction, offset, price in rows
+    ]
+
+
+def test_profit_factor_separates_a_lottery_ticket_from_an_edge() -> None:
+    """Same total pnl, different repeatability: the ratio has to tell them apart.
+
+    Ranked on pnl alone these two books are identical, so parameter selection
+    cannot see that one of them is one lucky round trip away from zero.
+    """
+    lottery = _fills([
+        ("a1", Direction.LONG, Offset.OPEN, 100.0),
+        ("a2", Direction.SHORT, Offset.CLOSE, 130.0),
+        ("a3", Direction.LONG, Offset.OPEN, 100.0),
+        ("a4", Direction.SHORT, Offset.CLOSE, 90.0),
+    ])
+
+    assert profit_factor(lottery) == pytest.approx(30.0 / 10.0)
+
+    # The same 20 of pnl, spread over four smaller round trips.
+    steady = _fills([
+        ("b1", Direction.LONG, Offset.OPEN, 100.0),
+        ("b2", Direction.SHORT, Offset.CLOSE, 115.0),
+        ("b3", Direction.LONG, Offset.OPEN, 100.0),
+        ("b4", Direction.SHORT, Offset.CLOSE, 115.0),
+        ("b5", Direction.LONG, Offset.OPEN, 100.0),
+        ("b6", Direction.SHORT, Offset.CLOSE, 90.0),
+        ("b7", Direction.LONG, Offset.OPEN, 100.0),
+        ("b8", Direction.SHORT, Offset.CLOSE, 90.0),
+    ])
+
+    # 15 + 15 + 15 + 15 - 10 - 10 - 10 - 10 = 20, same total, and a far more
+    # repeatable book than one 30 win against one 10 loss.
+    assert profit_factor(steady) == pytest.approx(60.0 / 40.0)
+    assert profit_factor(steady) < 3.0
+
+
+def test_profit_factor_is_zero_without_losing_round_trips() -> None:
+    """No losses means no ratio: the figure is undefined, not infinite.
+
+    Reporting infinity would let a single-win book sort above every real edge
+    and hand the out-of-sample window a configuration that never had to be
+    right more than once.
+    """
+    clean = _fills([
+        ("x1", Direction.LONG, Offset.OPEN, 100.0),
+        ("x2", Direction.SHORT, Offset.CLOSE, 105.0),
+        ("y1", Direction.LONG, Offset.OPEN, 100.0),
+        ("y2", Direction.SHORT, Offset.CLOSE, 107.0),
+    ])
+    assert profit_factor(clean) == 0.0
+
+
+def test_profit_factor_is_zero_with_no_trades() -> None:
+    assert profit_factor([]) == 0.0
+
+
+def test_backtest_reports_profit_factor() -> None:
+    """The summary carries the ratio so a campaign can be screened on it."""
+    strategy = load_strategy_class()(
+        cta_engine=None, strategy_name="bt", vt_symbol="rb9999.SHFE", setting={}
+    )
+    result: BacktestResult = run_backtest(
+        strategy, synthetic_bars(300), BacktestSettings()
+    )
+    assert "profit_factor" in result.summary()
+    assert result.profit_factor >= 0.0
 
 def test_load_bars_from_csv_accepts_comma_header_and_data(tmp_path: Path) -> None:
     path: Path = tmp_path / "rb_comma.csv"

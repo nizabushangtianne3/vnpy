@@ -317,13 +317,25 @@ def _pick_best_params(rows: list[dict]) -> dict:
     fold then validates a losing configuration. Profitable combinations rank
     first; only when every combination loses does Sharpe decide, so the fold
     still reports something for an operator to review.
+
+    Profit factor breaks ties inside the profitable pool. Two combinations
+    with the same pnl can differ by an order of magnitude in how repeatable
+    that pnl is: one big win against many small losses is a lottery ticket,
+    while many modest wins is an edge that survives a different window, and
+    only the repeatable half of that pair is worth carrying out of sample.
     """
     if not rows:
         raise ValueError("没有可用的训练段回测结果")
 
     profitable: list[dict] = [row for row in rows if row["total_pnl"] > 0]
     pool: list[dict] = profitable or rows
-    pool.sort(key=lambda item: item["sharpe"], reverse=True)
+    pool.sort(
+        key=lambda item: (
+            item["sharpe"],
+            item.get("profit_factor", 0.0),
+        ),
+        reverse=True,
+    )
     params: dict = pool[0]["params"]
     return params
 
@@ -457,6 +469,7 @@ def command_optimize(args: argparse.Namespace) -> int:
             "max_drawdown": result.max_drawdown,
             "trade_count": result.trade_count,
             "win_rate": result.win_rate,
+            "profit_factor": result.profit_factor,
         }
 
     print(f"参数组合数：{len(grid)}")
@@ -466,16 +479,16 @@ def command_optimize(args: argparse.Namespace) -> int:
             rows.append(_run_one(config, bars))
         rows.sort(key=lambda item: item["sharpe"], reverse=True)
         header = (
-            f"{'排名':>4} {'sharpe':>8} {'total_pnl':>12} {'max_dd':>10}"
-            f" {'trades':>8} {'win_rate':>9}  params"
+            f"{'排名':>4} {'sharpe':>8} {'total_pnl':>12} {'profit_f':>9}"
+            f" {'max_dd':>10} {'trades':>8} {'win_rate':>9}  params"
         )
         print(header)
         for rank, row in enumerate(rows[: max(args.top, 1)], start=1):
             params_text = ",".join(f"{k}={v}" for k, v in row["params"].items())
             print(
                 f"{rank:>4} {row['sharpe']:>8.3f} {row['total_pnl']:>12.2f}"
-                f" {row['max_drawdown']:>10.2f} {row['trade_count']:>8}"
-                f" {row['win_rate']:>9.3f}  {params_text}"
+                f" {row['profit_factor']:>9.3f} {row['max_drawdown']:>10.2f}"
+                f" {row['trade_count']:>8} {row['win_rate']:>9.3f}  {params_text}"
             )
         best_params: dict = _pick_best_params(rows) if rows else {}
         best: dict | None = next(

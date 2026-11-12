@@ -151,9 +151,9 @@ CSV 允许表头用逗号、数据行用空格的混合格式（真实行情导�
 python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40" --csv path/to/rb2410_1min.csv
 ```
 
-输出按夏普排序的参数表，包含每组的 `total_pnl`、`max_drawdown`、`trade_count`、`win_rate`。所有组合 `total_pnl <= 0` 时返回 1，可直接当流水线门槛。需要把结果交给外部程序或 CI 工件时，加 `--output path/to/result.json`，普通网格与 walk-forward 两种模式都会落盘：
+输出按夏普排序的参数表，包含每组的 `total_pnl`、`profit_factor`、`max_drawdown`、`trade_count`、`win_rate`。所有组合 `total_pnl <= 0` 时返回 1，可直接当流水线门槛。需要把结果交给外部程序或 CI 工件时，加 `--output path/to/result.json`，普通网格与 walk-forward 两种模式都会落盘：
 
-选参规则：盈利的组合优先，再在其中按夏普取最高；只有全部组合都亏损时才退化为单纯按夏普排序，并照样在末尾给出结论。纯按夏普选参会把「交易很少、曲线平滑但整体亏损」的组合送到样本外检验，等于用一个亏损参数去验证过拟合。
+选参规则：盈利的组合优先，再在其中按夏普取最高，夏普打平时用盈利因子取更可重复的那一组；只有全部组合都亏损时才退化为单纯按夏普排序，并照样在末尾给出结论。纯按夏普选参会把「交易很少、曲线平滑但整体亏损」的组合送到样本外检验，等于用一个亏损参数去验证过拟合。
 
 ```bash
 python -m vnpy.autonomous optimize --grid "fast_window=5,10,20;slow_window=20,40" \
@@ -186,6 +186,7 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
   win_rate         0.09
   max_drawdown     144.78
   sharpe           0.85
+  profit_factor    9.42
 ```
 
 `total_pnl <= 0` 时命令返回 1，可以直接挂到流水线里当门槛。
@@ -197,6 +198,8 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
 **关于胜率**：一个回合算盈利，要求扣除该回合全部成交的手续费与滑点后净盈亏为正。只看价格涨跌会把「浮盈变净亏」的回合也记成盈利，让高成本、只亏钱的策略显示高胜率。
 
 **关于夏普**：按 K 线时间间隔年化（`annual_sharpe`），因为不年化时同一策略在 1 分钟与 1 日数据上的得分不可比，`optimize` 会变成在比数据频率而不是比策略。做参数横向比较时，请固定用同一份数据的同一周期。
+
+**关于盈利因子**：`profit_factor` = 已平仓回合的总盈利 / 总亏损，与 `win_rate` 用同一套开平仓配对，所以两个数字不会互相矛盾。它回答的是 `total_pnl` 回答不了的问题：同样赚 2000，一个靠一次好运、一个靠几十笔小胜，在只按盈亏排序时完全等价，但前者换个窗口就不成立。`optimize` 的选参在「盈利优先、夏普次之」之后用盈利因子打破平手。没有亏损回合时为 0（不是无穷大）——只赚过一笔的参数组不应排在真正的优势前面。未平仓的持仓不计入这个比值。
 
 ## 开机自启（Windows 计划任务）
 

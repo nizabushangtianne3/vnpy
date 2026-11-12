@@ -77,6 +77,46 @@ def test_pick_best_params_skips_losing_combinations() -> None:
     assert _pick_best_params(rows) == {"fast_window": 10}
 
 
+def test_pick_best_params_prefers_the_repeatable_book() -> None:
+    """Equal pnl and Sharpe pick the parameter set that was right more often.
+
+    Both combinations made the same money on the training window, but one did
+    it with a single lucky round trip and the other with a small, consistent
+    edge. The lucky one is the one that stops working the moment the window
+    changes, so the fold is served the repeatable book.
+    """
+    from vnpy.autonomous.__main__ import _pick_best_params
+
+    rows: list[dict] = [
+        {
+            "params": {"fast_window": 5},
+            "total_pnl": 2000.0,
+            "sharpe": 1.0,
+            "profit_factor": 1.2,
+        },
+        {
+            "params": {"fast_window": 10},
+            "total_pnl": 2000.0,
+            "sharpe": 1.0,
+            "profit_factor": 3.4,
+        },
+    ]
+
+    assert _pick_best_params(rows) == {"fast_window": 10}
+
+
+def test_pick_best_params_tolerates_rows_without_profit_factor() -> None:
+    """A caller that does not report the ratio must still rank on pnl."""
+    from vnpy.autonomous.__main__ import _pick_best_params
+
+    rows: list[dict] = [
+        {"params": {"fast_window": 5}, "total_pnl": 100.0, "sharpe": 0.1},
+        {"params": {"fast_window": 10}, "total_pnl": 300.0, "sharpe": 0.2},
+    ]
+
+    assert _pick_best_params(rows) == {"fast_window": 10}
+
+
 def test_pick_best_params_falls_back_when_everything_loses() -> None:
     """A fold with no profitable combination still needs a parameter set."""
     from vnpy.autonomous.__main__ import _pick_best_params

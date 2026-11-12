@@ -81,6 +81,7 @@ class BacktestResult:
     win_rate: float = 0.0
     max_drawdown: float = 0.0
     sharpe: float = 0.0
+    profit_factor: float = 0.0
 
     def summary(self) -> dict[str, float | int]:
         """Flat mapping for state files, notifications and assertions."""
@@ -96,6 +97,7 @@ class BacktestResult:
             "win_rate": self.win_rate,
             "max_drawdown": self.max_drawdown,
             "sharpe": self.sharpe,
+            "profit_factor": self.profit_factor,
         }
 
 
@@ -368,19 +370,23 @@ def _build_result(
         win_rate=(winning / trade_count) if trade_count else 0.0,
         max_drawdown=max_drawdown,
         sharpe=annual_sharpe(equity_curve, timestamps),
+        profit_factor=profit_factor(engine.trades, engine.trade_costs),
     )
 
-def _count_winning_round_trips(
+def _round_trip_pnls(
     trades: list[TradeData],
     trade_costs: dict[str, float] | None = None,
-) -> int:
-    """Match an opening fill with its closing fill, count profitable pairs.
+) -> list[float]:
+    """Net pnl of every matched round trip, in fill order.
 
     A round trip is profitable only when the net pnl is positive: gross price
     movement minus the commission and slippage charged on every fill in the
     round trip. Counting gross movement alone reports a win on round trips
     that lose money, which inflates the win rate and hides a strategy that
     pays more in costs than it captures.
+
+    This is the single pairing used by the win rate, the profit factor and
+    the payoff ratio, so those figures cannot disagree with each other.
     """
     open_trades: dict[Direction, list[TradeData]] = {
         Direction.LONG: [],
@@ -388,6 +394,7 @@ def _count_winning_round_trips(
     }
 
     winning: int = 0
+    net_pnls: list[float] = []
 
     for trade in trades:
         if trade.offset is Offset.OPEN:
@@ -426,8 +433,38 @@ def _count_winning_round_trips(
 
         if gross - costs > 0:
             winning += 1
+        net_pnls.append(gross - costs)
 
-    return winning
+    return net_pnls
+
+
+def _count_winning_round_trips(
+    trades: list[TradeData],
+    trade_costs: dict[str, float] | None = None,
+) -> int:
+    """Count round trips whose net pnl is positive."""
+    pnls: list[float] = _round_trip_pnls(trades, trade_costs)
+    return sum(1 for pnl in pnls if pnl > 0)
+
+
+def profit_factor(
+    trades: list[TradeData],
+    trade_costs: dict[str, float] | None = None,
+) -> float:
+    """Gross profit divided by gross loss over the round trips.
+
+    A total pnl of 1000 from one 1000 win and nothing else is a coin flip,
+    while 1000 spread over fifty small wins is a repeatable edge, and both
+    rank identically when only pnl is ranked. This ratio carries that
+    difference, and it is the figure an operator reads to tell the two apart.
+    Returns 0.0 when there is nothing to divide.
+    """
+    pnls: list[float] = _round_trip_pnls(trades, trade_costs)
+    gross_profit: float = sum(pnl for pnl in pnls if pnl > 0)
+    gross_loss: float = -sum(pnl for pnl in pnls if pnl < 0)
+    if gross_loss <= 0:
+        return 0.0
+    return gross_profit / gross_loss
 
 
 def annual_sharpe(
