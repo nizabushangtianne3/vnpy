@@ -332,6 +332,43 @@ def test_winning_round_trips_pair_by_entry_direction() -> None:
     assert _count_winning_round_trips(losing) == 0
 
 
+def test_winning_round_trips_charge_commission_and_slippage() -> None:
+    """A gross winner that loses money after costs is not a win.
+
+    Counting gross price movement alone reports a win on any long->higher
+    close, so a strategy that pays more in commission and slippage than it
+    captures still looks like a winner.
+    """
+    from vnpy.autonomous.backtest import _count_winning_round_trips
+
+    def trade(tradeid: str, direction: Direction, offset: Offset, price: float) -> TradeData:
+        return TradeData(
+            gateway_name="FAKE",
+            symbol="rb",
+            exchange=Exchange.SHFE,
+            orderid=tradeid,
+            tradeid=tradeid,
+            direction=direction,
+            offset=offset,
+            price=price,
+            volume=1,
+        )
+
+    opening: TradeData = trade("5", Direction.LONG, Offset.OPEN, 100.0)
+    closing: TradeData = trade("6", Direction.SHORT, Offset.CLOSE, 100.5)
+    costs: dict[str, float] = {"5": 11.0, "6": 11.0}
+
+    # Gross +0.5 x 1 lot = +0.5, but 22 of cost turns it into a loss.
+    assert _count_winning_round_trips([opening, closing], costs) == 0
+
+    # With realistic low costs the same round trip wins again.
+    cheap: dict[str, float] = {"5": 0.2, "6": 0.2}
+    assert _count_winning_round_trips([opening, closing], cheap) == 1
+
+    # Without a cost map the gross movement decides, i.e. the old behaviour.
+    assert _count_winning_round_trips([opening, closing]) == 1
+
+
 def test_cost_basis_resets_after_a_flat() -> None:
     """A strategy left holding a stale cost basis reports nonsense pnl."""
     strategy = load_strategy_class()(

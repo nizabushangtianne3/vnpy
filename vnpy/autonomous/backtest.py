@@ -115,6 +115,7 @@ class _BacktestEngineStub:
         self.trades: list[TradeData] = []
         self.logs: list[str] = []
         self.pending: list[tuple[Direction, Offset, float, float]] = []
+        self.trade_costs: dict[str, float] = {}
         self._order_seq: int = 0
         self._trade_seq: int = 0
         self.next_bar: BarData | None = None
@@ -282,7 +283,9 @@ def run_backtest(
             if trade.tradeid in seen_trade_ids:
                 continue
             seen_trade_ids.add(trade.tradeid)
-            _apply_position_and_cost(strategy, trade, settings)
+            engine.trade_costs[trade.tradeid] = _apply_position_and_cost(
+                strategy, trade, settings
+            )
             strategy.on_trade(trade)
 
         strategy.on_bar(bar)
@@ -308,7 +311,7 @@ def _apply_position_and_cost(
     strategy: Any,
     trade: TradeData,
     settings: BacktestSettings,
-) -> None:
+) -> float:
     """Update net position from a fill and charge its commission."""
     signed: float = trade.volume * (1 if trade.direction is Direction.LONG else -1)
     # CtaEngine.process_trade_event updates position by direction alone,
@@ -326,6 +329,8 @@ def _apply_position_and_cost(
     ) * settings.size
     if cost and hasattr(strategy, "realized_pnl"):
         strategy.realized_pnl -= cost
+
+    return cost
 
 
 def _build_result(
@@ -348,7 +353,7 @@ def _build_result(
     trade_count: int = len(engine.trades)
     open_position: float = float(strategy.pos)
 
-    winning: int = _count_winning_round_trips(engine.trades)
+    winning: int = _count_winning_round_trips(engine.trades, engine.trade_costs)
 
     return BacktestResult(
         trades=list(engine.trades),
@@ -365,8 +370,18 @@ def _build_result(
         sharpe=annual_sharpe(equity_curve, timestamps),
     )
 
-def _count_winning_round_trips(trades: list[TradeData]) -> int:
-    """Match an opening fill with its closing fill, count profitable pairs."""
+def _count_winning_round_trips(
+    trades: list[TradeData],
+    trade_costs: dict[str, float] | None = None,
+) -> int:
+    """Match an opening fill with its closing fill, count profitable pairs.
+
+    A round trip is profitable only when the net pnl is positive: gross price
+    movement minus the commission and slippage charged on every fill in the
+    round trip. Counting gross movement alone reports a win on round trips
+    that lose money, which inflates the win rate and hides a strategy that
+    pays more in costs than it captures.
+    """
     open_trades: dict[Direction, list[TradeData]] = {
         Direction.LONG: [],
         Direction.SHORT: [],
@@ -397,11 +412,19 @@ def _count_winning_round_trips(trades: list[TradeData]) -> int:
             continue
 
         entry: TradeData = matches.pop(0)
+        gross: float
         if entry_direction is Direction.LONG:
-            pnl: float = (trade.price - entry.price) * trade.volume
+            gross = (trade.price - entry.price) * trade.volume
         else:
-            pnl = (entry.price - trade.price) * trade.volume
-        if pnl > 0:
+            gross = (entry.price - trade.price) * trade.volume
+
+        costs: float = 0.0
+        if trade_costs:
+            costs = trade_costs.get(entry.tradeid, 0.0) + trade_costs.get(
+                trade.tradeid, 0.0
+            )
+
+        if gross - costs > 0:
             winning += 1
 
     return winning
