@@ -23,6 +23,7 @@ from vnpy.autonomous.backtest import (
     load_bars_from_csv,
     BacktestSettings,
     BacktestResult,
+    annual_sharpe,
     _BacktestEngineStub,
     build_bar,
     run_backtest,
@@ -143,6 +144,41 @@ def test_slippage_moves_the_fill_against_the_trader() -> None:
     shorts: list[TradeData] = [t for t in filled if t.direction is Direction.SHORT]
     assert longs[0].price == pytest.approx(100.0)
     assert shorts[0].price == pytest.approx(100.0)
+
+
+def test_annual_sharpe_scales_with_bar_frequency() -> None:
+    """The same returns must produce one comparable ratio per interval.
+
+    Ranking by a per-sample ratio makes the optimizer compare data
+    frequencies instead of strategies: minute bars always look far better
+    than daily bars. Annualizing puts them on one scale.
+    """
+    curve: list[float] = [100.0, 100.0, 101.0, 101.0, 102.0, 102.0]
+
+    minute_stamps: list[datetime] = [
+        datetime(2024, 1, 2, 9, 0) + timedelta(minutes=index) for index in range(6)
+    ]
+    daily_stamps: list[datetime] = [
+        datetime(2024, 1, 2) + timedelta(days=index) for index in range(6)
+    ]
+
+    minute_sharpe: float = annual_sharpe(curve, minute_stamps)
+    daily_sharpe: float = annual_sharpe(curve, daily_stamps)
+
+    # 1440 daily-equivalent minutes per year vs 1 per year: the annualized
+    # values differ only by the square root of that sampling frequency.
+    assert minute_sharpe == pytest.approx(daily_sharpe * (1440 ** 0.5), rel=1e-6)
+
+    # No timestamps, no claimed frequency: the raw per-sample ratio.
+    assert annual_sharpe(curve) < minute_sharpe
+
+
+def test_annual_sharpe_flat_curve_is_zero() -> None:
+    """An unchanged curve has no volatility and therefore no ratio."""
+    stamps: list[datetime] = [
+        datetime(2024, 1, 2) + timedelta(days=index) for index in range(6)
+    ]
+    assert annual_sharpe([100.0] * 6, stamps) == 0.0
 
 
 def test_fill_price_respects_limit_across_a_gap() -> None:

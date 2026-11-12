@@ -269,6 +269,7 @@ def run_backtest(
 
     seen_trade_ids: set[str] = set()
     equity_curve: list[float] = [settings.capital]
+    timestamps: list[datetime] = [bar_list[0].datetime]
     peak: float = settings.capital
     max_drawdown: float = 0.0
 
@@ -290,8 +291,17 @@ def run_backtest(
         equity_curve.append(equity)
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
+        timestamps.append(bar.datetime)
 
-    return _build_result(strategy, engine, settings, bar_list, max_drawdown, equity_curve)
+    return _build_result(
+        strategy,
+        engine,
+        settings,
+        bar_list,
+        max_drawdown,
+        equity_curve,
+        timestamps,
+    )
 
 
 def _apply_position_and_cost(
@@ -325,6 +335,7 @@ def _build_result(
     bar_list: list[BarData],
     max_drawdown: float,
     equity_curve: list[float],
+    timestamps: list[datetime] | None = None,
 ) -> BacktestResult:
     """Assemble the result object from the replayed run."""
     # ``equity`` on a reporting strategy is total pnl (realized plus
@@ -351,7 +362,7 @@ def _build_result(
         equity=settings.capital + total,
         win_rate=(winning / trade_count) if trade_count else 0.0,
         max_drawdown=max_drawdown,
-        sharpe=_sharpe(equity_curve),
+        sharpe=annual_sharpe(equity_curve, timestamps),
     )
 
 def _count_winning_round_trips(trades: list[TradeData]) -> int:
@@ -396,17 +407,34 @@ def _count_winning_round_trips(trades: list[TradeData]) -> int:
     return winning
 
 
-def _sharpe(equity_curve: list[float]) -> float:
-    """Sharpe on bar-to-bar returns, zero when the curve is flat."""
-    if len(equity_curve) < 3:
-        return 0.0
+def annual_sharpe(
+    equity_curve: list[float],
+    timestamps: list[datetime] | None = None,
+) -> float:
+    """Sharpe ratio on bar-to-bar returns, annualized by the bar delta.
 
+    Without a time base the ratio is per-sample, so the same strategy scores
+    differently on 1-minute and daily bars and the optimizer ends up ranking
+    a data frequency instead of a strategy. Timestamps scaled per year turn
+    any interval into one comparable scale; without them the ratio stays
+    per-sample.
+    """
     returns: list[float] = []
     for previous, current in zip(equity_curve, equity_curve[1:], strict=False):
         if previous == 0:
             continue
         returns.append((current - previous) / abs(previous))
 
+    periods_per_year: float | None = _periods_per_year(timestamps, len(returns))
+    if periods_per_year is None:
+        return _ratio(returns)
+
+    scaled: float = _ratio(returns) * periods_per_year**0.5
+    return scaled
+
+
+def _ratio(returns: list[float]) -> float:
+    """Mean over standard deviation of a return series."""
     if len(returns) < 2:
         return 0.0
 
@@ -416,6 +444,32 @@ def _sharpe(equity_curve: list[float]) -> float:
     if deviation == 0:
         return 0.0
     return mean / deviation
+
+
+def _periods_per_year(timestamps: list[datetime] | None, samples: int) -> float | None:
+    """Infer the sampling frequency per year from bar timestamps.
+
+    The equity curve has one point per bar plus its seed value, so the number
+    of return intervals is ``len(equity) - 1``. Timestamps are only used when
+    they cover that interval count; a shorter list means the curve was built
+    without them and no frequency is claimed.
+    """
+    if not timestamps or samples <= 0 or len(timestamps) <= samples:
+        return None
+
+    deltas: list[float] = []
+    for previous, current in zip(timestamps, timestamps[1:], strict=False):
+        seconds: float = (current - previous).total_seconds()
+        if seconds > 0:
+            deltas.append(seconds)
+
+    if not deltas:
+        return None
+
+    mean_delta: float = sum(deltas) / len(deltas)
+    if mean_delta <= 0:
+        return None
+    return 365.0 * 24.0 * 3600.0 / mean_delta
 
 
 def build_bar(

@@ -190,6 +190,8 @@ python -m vnpy.autonomous optimize --grid "fast_window=5,10;slow_window=20,40" \
 
 **当前参考策略的实测结论**：修正成本模型后，`AutonomousTrendStrategy` 在默认合成序列（300 根，seed=7，滑点 0.5，费率 0.0001，乘数 10）上为 7 笔成交、1 笔盈利、总盈亏约 +2763.87。这仍只是链路验证：walk-forward 默认合成序列给出的样本外合计 pnl 约 +11.91、平均夏普 0.013，显著劣于样本内并触发淘汰门槛。必须用你自己的真实历史数据重跑 `backtest` 与 `optimize`，再决定是否启用——合成序列不能证明经济含义。
 
+**关于夏普**：按 K 线时间间隔年化（`annual_sharpe`），因为不年化时同一策略在 1 分钟与 1 日数据上的得分不可比，`optimize` 会变成在比数据频率而不是比策略。做参数横向比较时，请固定用同一份数据的同一周期。
+
 ## 开机自启（Windows 计划任务）
 
 无人值守需要进程不依赖人工登录。[install_service.ps1](install_service.ps1) 把守护进程注册成 Windows 计划任务：
