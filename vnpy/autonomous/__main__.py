@@ -468,6 +468,49 @@ def _selected_train_row(train_rows: list[dict], best_config: dict) -> dict:
     return train_rows[0]
 
 
+def _pooled_profit_factor(fold_results: list[dict]) -> float:
+    """Profit factor pooled from the gross sums of every fold.
+
+    A profit factor is gross profit over gross loss, so averaging the per-fold
+    ratios gives a two-round-trip fold the same weight as a fifty-round-trip
+    one. Pooling the folds keeps the aggregate consistent with the definition
+    the single-book profit factor already uses, and a run with no loss reports
+    0.0 like that convention.
+    """
+    profit: float = 0.0
+    loss: float = 0.0
+    for row in fold_results:
+        try:
+            profit += float(row.get("test_gross_profit", 0.0))
+            loss += float(row.get("test_gross_loss", 0.0))
+        except (TypeError, ValueError):
+            continue
+    if loss <= 0:
+        return 0.0
+    return profit / loss
+
+
+def _average_fold_metric(fold_results: list[dict], key: str) -> float:
+    """Average one metric across the folds that actually report it.
+
+    Payloads written before trade quality reached the fold file have no such
+    key. Averaging over zero would report a confident 0.0 for a metric that
+    was never measured, so the denominator is the count of folds that carry
+    the key, and a payload without it reports 0.0 with no folds counted.
+    """
+    values: list[float] = []
+    for row in fold_results:
+        if key not in row:
+            continue
+        try:
+            values.append(float(row[key]))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
 def _load_strategy_class(strategy_file: str, strategy_name: str) -> type:
     """Load a strategy class from a file without importing the whole package."""
     import importlib.util
@@ -654,6 +697,21 @@ def command_portfolio(args: argparse.Namespace) -> int:
                 "test_pnl": out_of_sample.total_pnl,
                 "test_sharpe": out_of_sample.sharpe,
                 "leg_pnls": out_of_sample.leg_pnls(),
+                # Trade quality for the combined book: the promotion gates
+                # grade sample size and payoff on round trips, so a combined
+                # verdict needs the combined figures rather than one leg's.
+                "test_trade_count": out_of_sample.trade_count,
+                "test_round_trips": out_of_sample.round_trips,
+                "test_win_rate": out_of_sample.win_rate,
+                "test_profit_factor": out_of_sample.profit_factor,
+                "test_max_drawdown": out_of_sample.max_drawdown,
+                # The gross split lets the aggregate pool the folds instead of
+                # averaging their ratios, matching the single-book definition.
+                "test_gross_profit": out_of_sample.gross_profit,
+                "test_gross_loss": out_of_sample.gross_loss,
+                "test_closed_pnl": out_of_sample.closed_pnl,
+                "test_unrealized_pnl": out_of_sample.unrealized_pnl,
+                "test_open_position": out_of_sample.open_position,
             }
         )
         window_start += args.test_bars
@@ -690,6 +748,22 @@ def command_portfolio(args: argparse.Namespace) -> int:
                     "folds": fold_results,
                     "aggregate_test_pnl": aggregate_test,
                     "aggregate_test_sharpe": aggregate_test_sharpe,
+                    "aggregate_test_round_trips": sum(
+                        int(r.get("test_round_trips", 0)) for r in fold_results
+                    ),
+                    "aggregate_test_win_rate": _average_fold_metric(
+                        fold_results, "test_win_rate"
+                    ),
+                    "aggregate_test_profit_factor": _pooled_profit_factor(
+                        fold_results
+                    ),
+                    "aggregate_test_closed_pnl": sum(
+                        float(r.get("test_closed_pnl", 0.0)) for r in fold_results
+                    ),
+                    "aggregate_test_unrealized_pnl": sum(
+                        float(r.get("test_unrealized_pnl", 0.0))
+                        for r in fold_results
+                    ),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -939,8 +1013,14 @@ def command_optimize(args: argparse.Namespace) -> int:
             "sharpe": result.sharpe,
             "max_drawdown": result.max_drawdown,
             "trade_count": result.trade_count,
+            "round_trips": result.round_trips,
+            "gross_profit": result.gross_profit,
+            "gross_loss": result.gross_loss,
             "win_rate": result.win_rate,
             "profit_factor": result.profit_factor,
+            "closed_pnl": result.closed_pnl,
+            "unrealized_pnl": result.unrealized_pnl,
+            "open_position": result.open_position,
         }
 
     print(f"参数组合数：{len(grid)}")
@@ -1001,6 +1081,24 @@ def command_optimize(args: argparse.Namespace) -> int:
                     "train_pnl": selected_train["total_pnl"],
                     "test_sharpe": out_of_sample["sharpe"],
                     "test_pnl": out_of_sample["total_pnl"],
+                    # Trade quality travels with the fold: a pnl produced by
+                    # three fills is a different claim than one produced by
+                    # three hundred, and a promotion gate cannot judge the
+                    # difference when the payload only carries the total.
+                    "test_trade_count": out_of_sample["trade_count"],
+                    "test_round_trips": out_of_sample.get("round_trips", 0),
+                    "test_win_rate": out_of_sample["win_rate"],
+                    "test_profit_factor": out_of_sample["profit_factor"],
+                    "test_max_drawdown": out_of_sample["max_drawdown"],
+                    "test_gross_profit": out_of_sample.get("gross_profit", 0.0),
+                    "test_gross_loss": out_of_sample.get("gross_loss", 0.0),
+                    # Realized versus booked: a sample window that ends in the
+                    # money because it never closed its position reports a
+                    # profit it has not earned, and a gate that cannot see the
+                    # difference graduates it unchanged.
+                    "test_closed_pnl": out_of_sample.get("closed_pnl", 0.0),
+                    "test_unrealized_pnl": out_of_sample.get("unrealized_pnl", 0.0),
+                    "test_open_position": out_of_sample.get("open_position", 0.0),
                 }
             )
             window_start += args.test_bars
@@ -1040,6 +1138,18 @@ def command_optimize(args: argparse.Namespace) -> int:
                         "aggregate_test_pnl": aggregate_test,
                         "aggregate_train_sharpe": aggregate_train_sharpe,
                         "aggregate_test_sharpe": aggregate_test_sharpe,
+                    "aggregate_test_trade_count": sum(
+                        int(r.get("test_trade_count", 0)) for r in fold_results
+                    ),
+                    "aggregate_test_round_trips": sum(
+                        int(r.get("test_round_trips", 0)) for r in fold_results
+                    ),
+                    "aggregate_test_win_rate": _average_fold_metric(
+                        fold_results, "test_win_rate"
+                    ),
+                    "aggregate_test_profit_factor": _pooled_profit_factor(
+                        fold_results
+                    ),
                     },
                     ensure_ascii=False,
                     indent=2,

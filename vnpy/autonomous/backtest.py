@@ -89,6 +89,13 @@ class BacktestResult:
     profit_factor: float = 0.0
     equity_curve: list[float] = field(default_factory=list)
     curve_dates: list[datetime] = field(default_factory=list)
+    round_trips: int = 0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+    # The cost map travels with the result so a portfolio can reuse the same
+    # round trips instead of recomputing them without costs, which would
+    # report gross movement and overstate every leg's payoff.
+    trade_costs: dict[str, float] = field(default_factory=dict)
 
     def summary(self) -> dict[str, float | int]:
         """Flat mapping for state files, notifications and assertions."""
@@ -96,15 +103,16 @@ class BacktestResult:
             "bars": self.bars,
             "trade_count": self.trade_count,
             "winning_trades": self.winning_trades,
+            "round_trips": self.round_trips,
+            "win_rate": self.win_rate,
+            "profit_factor": self.profit_factor,
             "open_position": self.open_position,
             "closed_pnl": self.closed_pnl,
             "unrealized_pnl": self.unrealized_pnl,
             "total_pnl": self.total_pnl,
             "equity": self.equity,
-            "win_rate": self.win_rate,
             "max_drawdown": self.max_drawdown,
             "sharpe": self.sharpe,
-            "profit_factor": self.profit_factor,
             "curve_points": len(self.equity_curve),
         }
 
@@ -364,21 +372,39 @@ def _build_result(
     open_position: float = float(strategy.pos)
 
     winning: int = _count_winning_round_trips(engine.trades, engine.trade_costs)
+    round_trip_pnls: list[float] = _round_trip_pnls(
+        engine.trades, engine.trade_costs
+    )
+    round_trip_count: int = len(round_trip_pnls)
+    gross_profit: float = sum(pnl for pnl in round_trip_pnls if pnl > 0)
+    gross_loss: float = -sum(pnl for pnl in round_trip_pnls if pnl < 0)
 
     return BacktestResult(
         trades=list(engine.trades),
         bars=len(bar_list),
         trade_count=trade_count,
         winning_trades=winning,
+        round_trips=round_trip_count,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
         closed_pnl=closed,
         open_position=open_position,
         unrealized_pnl=unrealized,
         total_pnl=total,
         equity=settings.capital + total,
-        win_rate=(winning / trade_count) if trade_count else 0.0,
+        # The win rate is shares won out of positions held, not out of fills.
+        # A strategy that scales in with one lot per bar fills five opens to
+        # build one position, so dividing wins by fills understates the rate
+        # by the number of scale-in legs: real daily data produced a 3.8%
+        # win rate for a book whose round trips actually won half the time.
+        # Open fills carry no outcome, so they belong in neither numerator
+        # nor denominator; the aside on the shared pairing below keeps the
+        # round trip count and the pnl list in agreement.
+        win_rate=(winning / round_trip_count) if round_trip_count else 0.0,
         max_drawdown=max_drawdown,
         sharpe=annual_sharpe(equity_curve, timestamps),
         profit_factor=profit_factor(engine.trades, engine.trade_costs),
+        trade_costs=dict(engine.trade_costs),
         equity_curve=list(equity_curve),
         curve_dates=list(timestamps or []),
     )
@@ -387,7 +413,7 @@ def _round_trip_pnls(
     trades: list[TradeData],
     trade_costs: dict[str, float] | None = None,
 ) -> list[float]:
-    """Net pnl of every matched round trip, in fill order.
+    """Net pnl of every position batch that was closed, in fill order.
 
     A round trip is profitable only when the net pnl is positive: gross price
     movement minus the commission and slippage charged on every fill in the
@@ -395,16 +421,29 @@ def _round_trip_pnls(
     that lose money, which inflates the win rate and hides a strategy that
     pays more in costs than it captures.
 
-    This is the single pairing used by the win rate, the profit factor and
-    the payoff ratio, so those figures cannot disagree with each other.
+    This is the single pairing used by the win rate, the profit factor and the
+    payoff ratio, so those figures cannot disagree with each other.
+
+    Scale-in entries belong to one position, not to one round trip each. A
+    trend strategy that adds a lot on every new high fills several OPEN
+    trades between two exits; pairing each open with a single close splits
+    one position into several round trips and leaves most fills unmatched.
+    On real daily data that dropped 80% of the fills, so the win rate counted
+    a handful of round trips over a denominator of every fill and the profit
+    factor described a book the strategy never traded. Entry fills that
+    follow one another without the position going flat are therefore
+    accumulated into one batch, and the batch is closed as a whole.
     """
     open_trades: dict[Direction, list[TradeData]] = {
         Direction.LONG: [],
         Direction.SHORT: [],
     }
-
-    winning: int = 0
+    batch: dict[Direction, list[TradeData]] = {
+        Direction.LONG: [],
+        Direction.SHORT: [],
+    }
     net_pnls: list[float] = []
+
 
     for trade in trades:
         if trade.offset is Offset.OPEN:
@@ -412,6 +451,7 @@ def _round_trip_pnls(
             if direction is None:
                 continue
             open_trades[direction].append(trade)
+            batch[direction].append(trade)
             continue
 
         closing_direction: Direction | None = trade.direction
@@ -424,28 +464,76 @@ def _round_trip_pnls(
         entry_direction: Direction = (
             Direction.SHORT if closing_direction is Direction.LONG else Direction.LONG
         )
-        matches: list[TradeData] = open_trades.get(entry_direction, [])
-        if not matches:
+        entries: list[TradeData] = batch[entry_direction]
+        outstanding: list[TradeData] = open_trades.get(entry_direction, [])
+        if not outstanding:
             continue
 
-        entry: TradeData = matches.pop(0)
-        gross: float
-        if entry_direction is Direction.LONG:
-            gross = (trade.price - entry.price) * trade.volume
-        else:
-            gross = (entry.price - trade.price) * trade.volume
+        if not entries:
+            # The entry fills for this batch are gone, so this close belongs
+            # to an earlier book: fall back to matching the outstanding opens
+            # one by one.
+            entry: TradeData = outstanding.pop(0)
+            gross: float = _fill_pnl(entry, trade, entry_direction)
+            costs: float = _fill_cost(entry, trade, trade_costs)
+            net_pnls.append(gross - costs)
+            continue
 
-        costs: float = 0.0
-        if trade_costs:
-            costs = trade_costs.get(entry.tradeid, 0.0) + trade_costs.get(
-                trade.tradeid, 0.0
-            )
+        # Consume the batch's entries in order, keeping the volume that the
+        # close actually retires. A close larger than the batch is capped at
+        # the batch so the accounting cannot invent exposure.
+        remaining: float = float(trade.volume)
+        gross = 0.0
+        costs = 0.0
+        for entry in list(entries):
+            if remaining <= 0:
+                break
+            used: float = min(float(entry.volume), remaining)
+            gross += _fill_pnl(entry, trade, entry_direction, used)
+            costs += _fill_cost(entry, trade, trade_costs, used)
+            remaining -= used
+            if used >= float(entry.volume):
+                entries.remove(entry)
+                if entry in outstanding:
+                    outstanding.remove(entry)
 
-        if gross - costs > 0:
-            winning += 1
         net_pnls.append(gross - costs)
 
     return net_pnls
+
+
+def _fill_pnl(
+    entry: TradeData,
+    exit_trade: TradeData,
+    entry_direction: Direction,
+    volume: float | None = None,
+) -> float:
+    """Gross price move of one entry fill against the fill that closes it."""
+    size: float = float(entry.volume) if volume is None else volume
+    if entry_direction is Direction.LONG:
+        return (exit_trade.price - entry.price) * size
+    return (entry.price - exit_trade.price) * size
+
+
+def _fill_cost(
+    entry: TradeData,
+    exit_trade: TradeData,
+    trade_costs: dict[str, float] | None,
+    volume: float | None = None,
+) -> float:
+    """Commission and slippage charged on both legs of one round trip.
+
+    The cost map holds the whole cost of a fill, so a partially closed entry
+    is charged only the share of its cost that the closed volume represents.
+    """
+    if not trade_costs:
+        return 0.0
+    entry_cost: float = trade_costs.get(entry.tradeid, 0.0)
+    exit_cost: float = trade_costs.get(exit_trade.tradeid, 0.0)
+    if volume is None or float(entry.volume) <= 0:
+        return entry_cost + exit_cost
+    share: float = volume / float(entry.volume)
+    return entry_cost * share + exit_cost * share
 
 
 def _count_winning_round_trips(
@@ -455,6 +543,23 @@ def _count_winning_round_trips(
     """Count round trips whose net pnl is positive."""
     pnls: list[float] = _round_trip_pnls(trades, trade_costs)
     return sum(1 for pnl in pnls if pnl > 0)
+
+
+def gross_split(
+    trades: list[TradeData],
+    trade_costs: dict[str, float] | None = None,
+) -> tuple[float, float]:
+    """Total winning pnl and total losing pnl over the round trips.
+
+    A profit factor is a ratio of two sums, so pooling several books requires
+    the sums rather than their ratios. Averaging ratios from books of unequal
+    size lets a two-round-trip book count as much as a fifty-round-trip one and
+    reports a figure that describes neither.
+    """
+    pnls: list[float] = _round_trip_pnls(trades, trade_costs)
+    profit: float = sum(pnl for pnl in pnls if pnl > 0)
+    loss: float = -sum(pnl for pnl in pnls if pnl < 0)
+    return profit, loss
 
 
 def profit_factor(
@@ -592,6 +697,15 @@ class PortfolioResult:
     max_drawdown: float = 0.0
     sharpe: float = 0.0
     trade_count: int = 0
+    winning_trades: int = 0
+    round_trips: int = 0
+    win_rate: float = 0.0
+    profit_factor: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+    closed_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    open_position: float = 0.0
 
     def leg_pnls(self) -> dict[str, float]:
         """Per-instrument total pnl, for attributing the combined figure."""
@@ -604,6 +718,15 @@ class PortfolioResult:
             "max_drawdown": self.max_drawdown,
             "sharpe": self.sharpe,
             "trade_count": self.trade_count,
+            "winning_trades": self.winning_trades,
+            "round_trips": self.round_trips,
+            "win_rate": self.win_rate,
+            "profit_factor": self.profit_factor,
+            "gross_profit": self.gross_profit,
+            "gross_loss": self.gross_loss,
+            "closed_pnl": self.closed_pnl,
+            "unrealized_pnl": self.unrealized_pnl,
+            "open_position": self.open_position,
             "legs": len(self.legs),
             "leg_pnls": self.leg_pnls(),
         }
@@ -670,6 +793,23 @@ def run_portfolio_backtest(
 
     total_pnl: float = equity - settings.capital
     trade_count: int = sum(result.trade_count for result in legs.values())
+    winning_trades: int = sum(result.winning_trades for result in legs.values())
+    closed_pnl: float = sum(result.closed_pnl for result in legs.values())
+    unrealized_pnl: float = sum(result.unrealized_pnl for result in legs.values())
+    open_position: float = sum(result.open_position for result in legs.values())
+    pooled_profit: float
+    pooled_loss: float
+    pooled_profit, pooled_loss = _pooled_gross(legs)
+    round_trips: int = sum(result.round_trips for result in legs.values())
+    # The combined book holds every leg's round trips, so its win rate and
+    # profit factor describe the whole book rather than one leg. A gate that
+    # judged the portfolio by a single leg's payoff would grade a book nobody
+    # trades, and a single-leg figure would hide a leg losing steadily next
+    # to a louder winner.
+    win_rate: float = (
+        winning_trades / round_trips if round_trips else 0.0
+    )
+    profit_factor: float = _portfolio_profit_factor(legs)
     # ``annual_sharpe`` reads one timestamp per return interval while the
     # curve carries one extra point for its starting capital, so the series
     # is seeded with the first date.
@@ -682,7 +822,41 @@ def run_portfolio_backtest(
         max_drawdown=max_drawdown,
         sharpe=annual_sharpe(equity_curve, sharpe_dates),
         trade_count=trade_count,
+        winning_trades=winning_trades,
+        round_trips=round_trips,
+        win_rate=win_rate,
+        profit_factor=profit_factor,
+        gross_profit=pooled_profit,
+        gross_loss=pooled_loss,
+        closed_pnl=closed_pnl,
+        unrealized_pnl=unrealized_pnl,
+        open_position=open_position,
     )
+
+
+def _pooled_gross(legs: Mapping[str, BacktestResult]) -> tuple[float, float]:
+    """Sum the gross profit and gross loss of every leg.
+
+    Summing the per-leg ratios would weight a leg that traded rarely as much
+    as one that ran all year, so the round trip sums themselves are pooled
+    before dividing. A leg reuses the split computed while it ran, so the
+    pooled figures stay consistent with each leg's own profit factor.
+    """
+    profit: float = sum(result.gross_profit for result in legs.values())
+    loss: float = sum(result.gross_loss for result in legs.values())
+    return profit, loss
+
+
+def _portfolio_profit_factor(legs: Mapping[str, BacktestResult]) -> float:
+    """Gross profit over gross loss across every leg's round trips.
+
+    Without any loss there is no ratio, matching the single-book convention of
+    reporting 0.0 rather than infinity.
+    """
+    profit, loss = _pooled_gross(legs)
+    if loss <= 0:
+        return 0.0
+    return profit / loss
 
 
 def load_bars_from_csv(

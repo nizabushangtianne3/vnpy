@@ -409,22 +409,28 @@ def test_empty_bar_series_is_rejected() -> None:
         run_backtest(strategy, [], BacktestSettings())
 
 
-def _fills(rows: list[tuple[str, Direction, Offset, float]]) -> list[TradeData]:
-    """Build fills from (tradeid, direction, offset, price) rows."""
-    return [
-        TradeData(
-            gateway_name="FAKE",
-            symbol="rb",
-            exchange=Exchange.SHFE,
-            orderid=tradeid,
-            tradeid=tradeid,
-            direction=direction,
-            offset=offset,
-            price=price,
-            volume=1,
+def _fills(
+    rows: list[tuple[str, Direction, Offset, float, float | None]],
+) -> list[TradeData]:
+    """Build fills from (tradeid, direction, offset, price[, volume]) rows."""
+    filled: list[TradeData] = []
+    for row in rows:
+        tradeid, direction, offset, price = row[:4]
+        volume: float = row[4] if len(row) > 4 and row[4] is not None else 1.0
+        filled.append(
+            TradeData(
+                gateway_name="FAKE",
+                symbol="rb",
+                exchange=Exchange.SHFE,
+                orderid=tradeid,
+                tradeid=tradeid,
+                direction=direction,
+                offset=offset,
+                price=price,
+                volume=volume,
+            )
         )
-        for tradeid, direction, offset, price in rows
-    ]
+    return filled
 
 
 def test_profit_factor_separates_a_lottery_ticket_from_an_edge() -> None:
@@ -478,6 +484,82 @@ def test_profit_factor_is_zero_without_losing_round_trips() -> None:
 
 def test_profit_factor_is_zero_with_no_trades() -> None:
     assert profit_factor([]) == 0.0
+
+
+def test_scale_in_entries_close_as_one_round_trip() -> None:
+    """Three adds and one flat is a single position, not three round trips.
+
+    The reference strategy adds one lot per bar and closes the whole position
+    at once. Pairing each open against a single close would leave two of the
+    three entries unmatched and price the position as if it held one lot, so
+    the pnl of the one real round trip is computed over the whole batch.
+    """
+    from vnpy.autonomous.backtest import _round_trip_pnls
+
+    trades = _fills([
+        ("a1", Direction.LONG, Offset.OPEN, 100.0),
+        ("a2", Direction.LONG, Offset.OPEN, 101.0),
+        ("a3", Direction.LONG, Offset.OPEN, 102.0),
+        ("a4", Direction.SHORT, Offset.CLOSE, 108.0, 3.0),
+    ])
+
+    pnls = _round_trip_pnls(trades)
+
+    # (108-100) + (108-101) + (108-102) = 8 + 7 + 6
+    assert pnls == pytest.approx([21.0])
+
+
+def test_partial_close_consumes_only_its_own_volume() -> None:
+    """A close smaller than the position leaves the rest of the batch open."""
+    from vnpy.autonomous.backtest import _round_trip_pnls
+
+    trades = _fills([
+        ("b1", Direction.LONG, Offset.OPEN, 100.0),
+        ("b2", Direction.LONG, Offset.OPEN, 100.0),
+        ("b3", Direction.SHORT, Offset.CLOSE, 110.0, 1.0),
+    ])
+
+    pnls = _round_trip_pnls(trades)
+
+    # One lot of two closed at 110 = +10, and the second entry stays open.
+    assert pnls == pytest.approx([10.0])
+
+
+def test_win_rate_counts_positions_not_fills() -> None:
+    """The win rate shares positions held, not fills executed.
+
+    A scale-in strategy fills five opens to build one position. Dividing wins
+    by fills reported a 3.8% win rate for a book whose round trips actually
+    won half the time, which made every candidate look worse than it was.
+    """
+    strategy = load_strategy_class()(
+        cta_engine=None,
+        strategy_name="wr",
+        vt_symbol="rb9999.SHFE",
+        setting={"fast_window": 5, "slow_window": 40, "stop_atr": 2},
+    )
+    result = run_backtest(strategy, synthetic_bars(300), BacktestSettings())
+
+    assert result.trade_count > result.round_trips
+    if result.round_trips:
+        expected = result.winning_trades / result.round_trips
+        assert result.win_rate == pytest.approx(expected)
+
+
+def test_round_trips_exclude_an_open_position_at_the_end() -> None:
+    """The entries left open at the last bar are not closed round trips."""
+    from vnpy.autonomous.backtest import _round_trip_pnls
+
+    trades = _fills([
+        ("c1", Direction.LONG, Offset.OPEN, 100.0),
+        ("c2", Direction.LONG, Offset.OPEN, 101.0),
+        ("c3", Direction.SHORT, Offset.CLOSE, 105.0, 2.0),
+        ("d1", Direction.LONG, Offset.OPEN, 100.0),
+        ("d2", Direction.LONG, Offset.OPEN, 100.0),
+    ])
+
+    # (105-100) + (105-101) = 9, and the second position never closes.
+    assert _round_trip_pnls(trades) == pytest.approx([9.0])
 
 
 def test_backtest_reports_profit_factor() -> None:

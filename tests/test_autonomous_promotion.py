@@ -35,6 +35,11 @@ def _folds(pnls: list[float], params: dict | None = None) -> list[dict]:
             "train_pnl": 100000.0,
             "test_sharpe": 0.8,
             "test_pnl": pnl,
+            "test_trade_count": 40,
+            "test_round_trips": 9,
+            "test_win_rate": 0.34,
+            "test_profit_factor": 1.3,
+            "test_max_drawdown": 1000.0,
         }
         for index, pnl in enumerate(pnls)
     ]
@@ -50,6 +55,10 @@ def _payload(pnls: list[float], train_sharpe: float = 1.0) -> dict:
         "aggregate_test_pnl": sum(pnls),
         "aggregate_train_sharpe": train_sharpe,
         "aggregate_test_sharpe": 0.6,
+        "aggregate_test_trade_count": 40 * len(pnls),
+        "aggregate_test_round_trips": 9 * len(pnls),
+        "aggregate_test_win_rate": 0.34,
+        "aggregate_test_profit_factor": 1.3,
     }
 
 
@@ -324,3 +333,46 @@ def test_apply_never_emits_a_setting_for_a_refused_verdict() -> None:
     )
     assert document["app_settings"]["CtaStrategy"]["strategies"] == []  # type: ignore[index]
 
+def test_retires_when_out_of_sample_trade_count_is_too_thin() -> None:
+    """A profit factor over three round trips is not a claim about anything.
+
+    The edge gates grade repeatability, so grading them on a sample of three
+    hands the operator a verdict that describes noise. A candidate that clears
+    every other gate but traded too little is retired, not promoted.
+    """
+    payload = _payload([50000.0, 60000.0, 30000.0, 40000.0])
+    payload["aggregate_test_round_trips"] = 6
+
+    report = evaluate_candidate("m9999.DCE", payload)
+
+    assert report.verdict == RETIRE
+    assert any("回合数" in reason for reason in report.reasons)
+
+
+def test_retires_when_losses_are_not_covered() -> None:
+    """A total pnl that only one outlier produced is a lottery ticket.
+
+    Profit factor below one means the winners do not even cover the losers,
+    however large the remaining figure looks.
+    """
+    payload = _payload([50000.0, 60000.0, 30000.0, 40000.0])
+    payload["aggregate_test_profit_factor"] = 0.6
+
+    report = evaluate_candidate("m9999.DCE", payload)
+
+    assert report.verdict == RETIRE
+    assert any("盈亏比" in reason for reason in report.reasons)
+
+
+def test_report_summary_reports_trade_quality() -> None:
+    """The machine-readable summary must carry the measured figures.
+
+    A decision an operator cannot audit is decoration; the same numbers the
+    gates read have to appear in the JSON and the state file.
+    """
+    report = evaluate_candidate("m9999.DCE", _payload([50000.0, 60000.0, 30000.0, 40000.0]))
+    payload: dict = report.summary()
+
+    assert payload["out_round_trips"] > 0
+    assert payload["out_win_rate"] > 0
+    assert payload["out_profit_factor"] > 0

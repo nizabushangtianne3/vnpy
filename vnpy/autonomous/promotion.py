@@ -30,28 +30,54 @@ class PromotionRules:
     Defaults follow the promotion manual's stage one: out-of-sample pnl
     positive, and out-of-sample Sharpe within half the in-sample figure, which
     is the manual's "not significantly worse" wording restated as a number.
+
+    The trade-quality gates have their own defaults, measured rather than
+    chosen. A ten-instrument walk-forward on daily bars with the reference
+    trend strategy produced 30 to 92 out-of-sample round trips per candidate,
+    win rates from 0.05 to 0.49 and profit factors from 0.02 to 2.29; the two
+    candidates that also cleared every edge gate (8/8 and 4/4 profitable
+    folds, Sharpe ratios 0.54 and 0.80) sat at 70 and 31 round trips with win
+    rates of 0.34 and 0.49. A floor of 20 round trips and a profit factor of
+    1.0 therefore keeps both and refuses the rest without inventing numbers.
+    The profit factor floor is the weaker of the two: a book whose winners do
+    not at least cover its losers cannot survive a drawdown, and a total pnl
+    that says otherwise came from one outlier.
     """
 
     min_out_pnl: float = 0.0
     min_out_sharpe_ratio: float = 0.5
     min_profitable_fold_ratio: float = 0.5
     min_folds: int = 4
+    min_out_round_trips: int = 20
+    min_out_profit_factor: float = 1.0
+    require_closed_pnl_positive: bool = True
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> PromotionRules:
         """Build rules from a raw config dict, ignoring unknown keys."""
         defaults: PromotionRules = cls()
         known: set[str] = set(cls().__dataclass_fields__)
-        values: dict[str, float] = {}
+        values: dict[str, object] = {}
+        # bool is an int subclass, so an isinstance check alone would route
+        # require_closed_pnl_positive through the int branch and turn
+        # "false" into 0 rather than the flag the gate reads.
+        bool_fields: set[str] = {
+            name for name in known if isinstance(getattr(defaults, name), bool)
+        }
         int_fields: set[str] = {
-            name for name in known if isinstance(getattr(defaults, name), int)
+            name
+            for name in known
+            if isinstance(getattr(defaults, name), int) and name not in bool_fields
         }
         for key, value in data.items():
             if key not in known or value is None:
                 continue
-            values[key] = (
-                int(_as_float(value)) if key in int_fields else _as_float(value)
-            )
+            if key in bool_fields:
+                values[key] = bool(value)
+            elif key in int_fields:
+                values[key] = int(_as_float(value))
+            else:
+                values[key] = _as_float(value)
         return cls(**values)  # type: ignore[arg-type]
 
     def to_dict(self) -> dict[str, float]:
@@ -70,6 +96,11 @@ class CandidateReport:
     out_sharpe: float = 0.0
     in_sharpe: float = 0.0
     profitable_fold_ratio: float = 0.0
+    out_round_trips: int = 0
+    out_win_rate: float = 0.0
+    out_profit_factor: float = 0.0
+    out_closed_pnl: float = 0.0
+    out_unrealized_pnl: float = 0.0
     leg_pnls: dict[str, float] = field(default_factory=dict)
 
     def summary(self) -> dict[str, object]:
@@ -82,6 +113,11 @@ class CandidateReport:
             "out_sharpe": self.out_sharpe,
             "in_sharpe": self.in_sharpe,
             "profitable_fold_ratio": self.profitable_fold_ratio,
+            "out_round_trips": self.out_round_trips,
+            "out_win_rate": self.out_win_rate,
+            "out_profit_factor": self.out_profit_factor,
+            "out_closed_pnl": self.out_closed_pnl,
+            "out_unrealized_pnl": self.out_unrealized_pnl,
             "leg_pnls": dict(self.leg_pnls),
         }
 
@@ -116,12 +152,46 @@ def evaluate_candidate(
     fold_pnls: list[float] = [_as_float(fold.get("test_pnl")) for fold in folds]
     profitable_folds: int = sum(1 for value in fold_pnls if value > 0)
     fold_ratio: float = profitable_folds / len(fold_pnls) if fold_pnls else 0.0
+    out_round_trips: int = int(_as_float(payload.get("aggregate_test_round_trips")))
+    out_win_rate: float = _as_float(payload.get("aggregate_test_win_rate"))
+    out_profit_factor: float = _as_float(payload.get("aggregate_test_profit_factor"))
+    out_closed_pnl: float = _as_float(payload.get("aggregate_test_closed_pnl"))
+    out_unrealized_pnl: float = _as_float(payload.get("aggregate_test_unrealized_pnl"))
+    payload_has_closed_pnl: bool = "aggregate_test_closed_pnl" in payload
 
     reasons: list[str] = []
     if not folds:
         reasons.append("没有可用的样本外折叠，无法判定")
     if out_pnl <= rules.min_out_pnl:
         reasons.append(f"样本外合计盈亏 {out_pnl:.2f} 未超过 {rules.min_out_pnl:.2f}")
+    # Sample size first: a profit factor computed over three round trips is
+    # not yet a claim about anything, and the gates below would otherwise
+    # grade it.
+    if out_round_trips < rules.min_out_round_trips:
+        reasons.append(
+            f"样本外回合数 {out_round_trips} 少于 {rules.min_out_round_trips} 个，"
+            "样本量不足以支撑盈亏质量判断"
+        )
+    if out_profit_factor < rules.min_out_profit_factor:
+        reasons.append(
+            f"样本外盈亏比 {out_profit_factor:.3f} 低于 "
+            f"{rules.min_out_profit_factor:.3f}，盈利未覆盖亏损"
+        )
+    # A window can close in profit purely because it never closed its
+    # position: the last bar leaves an open trade marked to market, and the
+    # total pnl inherits that mark. The realized figure is what a live
+    # strategy would actually have banked, so it is what the gate grades. A
+    # payload without the split is grandfathered: refusing to judge it would
+    # raise the bar retroactively on conclusions already published.
+    if (
+        rules.require_closed_pnl_positive
+        and payload_has_closed_pnl
+        and out_closed_pnl <= 0
+    ):
+        reasons.append(
+            f"样本外已实现盈亏 {out_closed_pnl:.2f} 未超过 0，"
+            f"窗口靠未平仓浮盈 {out_unrealized_pnl:.2f} 撑起总盈亏"
+        )
     if in_sharpe > 0 and out_sharpe < in_sharpe * rules.min_out_sharpe_ratio:
         reasons.append(
             f"样本外夏普 {out_sharpe:.3f} 低于样本内 {in_sharpe:.3f} 的 "
@@ -185,6 +255,11 @@ def evaluate_candidate(
         out_sharpe=out_sharpe,
         in_sharpe=in_sharpe,
         profitable_fold_ratio=fold_ratio,
+        out_round_trips=out_round_trips,
+        out_win_rate=out_win_rate,
+        out_profit_factor=out_profit_factor,
+        out_closed_pnl=out_closed_pnl,
+        out_unrealized_pnl=out_unrealized_pnl,
         leg_pnls=leg_pnls,
     )
 
