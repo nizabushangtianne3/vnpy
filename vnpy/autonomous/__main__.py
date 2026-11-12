@@ -344,6 +344,21 @@ def _pick_best_params(rows: list[dict]) -> dict:
     return params
 
 
+def _selected_train_row(train_rows: list[dict], best_config: dict) -> dict:
+    """Return the train metrics of the configuration this fold selected.
+
+    Train rows are produced in grid order, so ``train_rows[0]`` describes
+    whichever combination was listed first rather than the one carried out of
+    sample. Reporting it would pair an in-sample number with an out-of-sample
+    number from two different parameter sets, and the degradation a reader is
+    trying to judge becomes meaningless.
+    """
+    for row in train_rows:
+        if row["params"] == best_config:
+            return row
+    return train_rows[0]
+
+
 def command_optimize(args: argparse.Namespace) -> int:
     """Run the same strategy over a parameter grid and rank the results."""
     try:
@@ -523,14 +538,15 @@ def command_optimize(args: argparse.Namespace) -> int:
             for config in grid:
                 train_rows.append(_run_one(config, train_bars_slice))
             best_config: dict = _pick_best_params(train_rows)
+            selected_train: dict = _selected_train_row(train_rows, best_config)
             out_of_sample: dict = _run_one(best_config, test_bars_slice)
             fold_results.append(
                 {
                     "fold": len(fold_results) + 1,
                     "train_start": window_start,
                     "best_params": best_config,
-                    "train_sharpe": train_rows[0]["sharpe"],
-                    "train_pnl": train_rows[0]["total_pnl"],
+                    "train_sharpe": selected_train["sharpe"],
+                    "train_pnl": selected_train["total_pnl"],
                     "test_sharpe": out_of_sample["sharpe"],
                     "test_pnl": out_of_sample["total_pnl"],
                 }

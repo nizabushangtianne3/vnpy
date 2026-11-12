@@ -1,4 +1,4 @@
-﻿"""Grid parsing and ranking for the parameter optimization CLI.
+"""Grid parsing and ranking for the parameter optimization CLI.
 
 A parameter scan is only useful if the expansion is deterministic and the
 ranking is honest: the parser must reject malformed input instead of silently
@@ -218,6 +218,55 @@ def test_optimize_cli_writes_walk_forward_output(tmp_path: Path) -> None:
     assert {"fold", "best_params", "test_pnl", "test_sharpe"} <= set(folds[0])
 
 
+def test_walk_forward_reports_the_selected_train_row() -> None:
+    """In-sample numbers must come from the parameters the fold selected.
+
+    Train rows are produced in grid order, so borrowing ``train_rows[0]``
+    reports whichever combination was listed first. Pairing that with an
+    out-of-sample number from a different parameter set makes the in-sample
+    to out-of-sample comparison meaningless, which is exactly the judgement a
+    walk-forward exists to support.
+    """
+    from vnpy.autonomous.__main__ import _selected_train_row
+
+    rows: list[dict] = [
+        {
+            "params": {"fast_window": 5},
+            "total_pnl": -100.0,
+            "sharpe": -0.5,
+            "profit_factor": 0.0,
+        },
+        {
+            "params": {"fast_window": 10},
+            "total_pnl": 500.0,
+            "sharpe": 1.4,
+            "profit_factor": 1.9,
+        },
+        {
+            "params": {"fast_window": 20},
+            "total_pnl": 200.0,
+            "sharpe": 0.6,
+            "profit_factor": 1.2,
+        },
+    ]
+    selected: dict = _selected_train_row(rows, {"fast_window": 20})
+    assert selected["params"] == {"fast_window": 20}
+    assert selected["total_pnl"] == 200.0
+    assert selected["sharpe"] == 0.6
+
+
+def test_selected_train_row_falls_back_when_the_config_is_absent() -> None:
+    """A configuration outside the grid keeps the fold reporting something."""
+    from vnpy.autonomous.__main__ import _selected_train_row
+
+    rows: list[dict] = [
+        {"params": {"fast_window": 5}, "total_pnl": 10.0, "sharpe": 0.1},
+        {"params": {"fast_window": 10}, "total_pnl": 20.0, "sharpe": 0.2},
+    ]
+    fallback: dict = _selected_train_row(rows, {"fast_window": 99})
+    assert fallback is rows[0]
+
+
 def test_optimize_cli_runs_and_prints_ranking() -> None:
     """Run the CLI through the same interpreter pytest is using."""
     result = subprocess.run(
@@ -354,3 +403,5 @@ def test_optimize_rejects_bars_below_single_fold() -> None:
     combined: str = result.stdout + result.stderr
     assert "K线不足以组成一个完整的 walk-forward 折叠" in combined, combined
     assert result.returncode == 2
+
+
