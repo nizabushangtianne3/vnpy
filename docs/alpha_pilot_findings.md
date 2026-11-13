@@ -46,3 +46,22 @@ Two things this sweep does not yet establish: what the signal's own predictive
 power is (an IC against the label, before any trading rules), and whether the
 book can hold top_k 50 names at once. The cap being inert means the sizing
 path, not the cap, is now the thing setting turnover.
+Two things this sweep does not yet establish: what the signal's own predictive
+power is (an IC against the label, before any trading rules), and whether the
+book can hold top_k 50 names at once. The cap being inert means the sizing
+path, not the cap, is now the thing setting turnover.
+
+## The signal itself does predict
+
+Scored against the label over the same 693 sessions, the aligned signal has a
+mean cross-sectional rank IC of 0.0377, an ICIR of 0.30, and a positive IC on
+61.1 percent of sessions. By year the IC stays positive throughout (2024 is
+0.0434). That is a real but weak edge, which is the shape a 5-day prediction
+horizon on daily bars usually takes.
+
+The trading rules are what stands between that edge and a return. At IC 0.0377
+the gross headroom is small, so a book that turns over its capital more than a
+handful of times over the window spends it all on commissions: the 1.00
+turnover-cap rows pay for their return in churn, and the 0.30 rows leave the
+signal unexploited. The gap between the two is where the next improvement has
+to come from, and it is a sizing and universe problem rather than a model one.
