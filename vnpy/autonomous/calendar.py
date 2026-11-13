@@ -34,6 +34,52 @@ CN_FUTURES_MIDNIGHT_NIGHT_SESSIONS: list[tuple[str, str, str]] = [
 
 # Official 2026 exchange closure days for Chinese futures, including the
 # night-session preparatory days announced alongside each holiday block.
+CN_A_SHARE_DAY_SESSIONS: list[tuple[str, str, str]] = [
+    ("a_share_morning", "09:30", "11:30"),
+    ("a_share_afternoon", "13:00", "15:00"),
+]
+
+# The A-share overnight-hold method decides one thing: which contracts to
+# carry past the closing auction. It needs a window that ends after the
+# cluster auction runs to 15:00 and a next-day window that starts after the
+# 09:25-09:30 opening auction, because an auction price is not a signal you
+# can legitimately observe and then act on at the same instant.
+CN_A_SHARE_OVERNIGHT_SESSIONS: list[tuple[str, str, str]] = [
+    ("a_share_entry", "09:35", "14:57"),
+    ("a_share_exit", "09:30", "10:00"),
+]
+
+# 2026 A-share market closures. China's A-share calendar is not the futures
+# one, so it is declared separately rather than folded into
+# CN_FUTURES_HOLIDAYS_2026, whose preparatory days have no A-share meaning.
+CN_A_SHARE_HOLIDAYS_2026: frozenset[date] = frozenset(
+    {
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        date(2026, 2, 15),
+        date(2026, 2, 16),
+        date(2026, 2, 17),
+        date(2026, 2, 18),
+        date(2026, 2, 19),
+        date(2026, 2, 20),
+        date(2026, 2, 23),
+        date(2026, 2, 24),
+        date(2026, 4, 6),
+        date(2026, 5, 1),
+        date(2026, 5, 4),
+        date(2026, 5, 5),
+        date(2026, 6, 19),
+        date(2026, 9, 25),
+        date(2026, 10, 1),
+        date(2026, 10, 2),
+        date(2026, 10, 5),
+        date(2026, 10, 6),
+        date(2026, 10, 7),
+        date(2026, 10, 8),
+    }
+)
+
+
 CN_FUTURES_HOLIDAYS_2026: frozenset[date] = frozenset(
     {
         date(2026, 1, 1),
@@ -316,6 +362,13 @@ def build_profile(
         profile_holidays = frozenset(
             merge_holidays(CN_FUTURES_HOLIDAYS_2026, holidays)
         )
+    elif profile_name in ("cn_a_share", "cn_a_share_overnight"):
+        # A-share closures are a different list from the futures one, so
+        # merging them in here would let a futures prep day close a stock
+        # market that was in fact open.
+        profile_holidays = frozenset(
+            merge_holidays(CN_A_SHARE_HOLIDAYS_2026, holidays)
+        )
 
     if sessions is not None:
         resolved = [
@@ -335,6 +388,16 @@ def build_profile(
             for name, start, end in FULL_DAY_SESSIONS
         ]
         skip_weekend = True
+    elif profile_name == "cn_a_share":
+        resolved = [
+            Session.from_strings(name, start, end)
+            for name, start, end in CN_A_SHARE_DAY_SESSIONS
+        ]
+    elif profile_name == "cn_a_share_overnight":
+        resolved = [
+            Session.from_strings(name, start, end)
+            for name, start, end in CN_A_SHARE_OVERNIGHT_SESSIONS
+        ]
     else:
         resolved = [
             Session.from_strings(name, start, end)
@@ -351,4 +414,10 @@ def build_profile(
     )
 
 
-PROFILE_NAMES: list[str] = ["cn_futures", "cn_futures_midnight", "full_day"]
+PROFILE_NAMES: list[str] = [
+    "cn_futures",
+    "cn_futures_midnight",
+    "cn_a_share",
+    "cn_a_share_overnight",
+    "full_day",
+]

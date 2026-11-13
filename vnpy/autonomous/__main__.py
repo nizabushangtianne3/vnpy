@@ -12,10 +12,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .calendar import PROFILE_NAMES
 from .config import default_config_path, load_config, validate_config
@@ -26,6 +27,9 @@ from .runner import (
     AutonomousRunner,
     atomic_write_json,
 )
+
+from vnpy.trader.constant import Exchange
+from vnpy.trader.object import BarData
 
 
 def _add_config_argument(parser: argparse.ArgumentParser) -> None:
@@ -77,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     optimize_parser.add_argument("--interval", default="MINUTE", help="K线周期，仅 CSV 使用")
     optimize_parser.add_argument("--start", default="", help="数据库起始时间")
     optimize_parser.add_argument("--end", default="", help="数据库结束时间")
+    optimize_parser.add_argument(
+        "--stocks",
+        action="append",
+        default=[],
+        help="A 股代码，可重复；给定后从公开行情接口拉前复权日线，忽略 --csv",
+    )
+    optimize_parser.add_argument("--stock-years", type=int, default=3, help="A 股回溯年数")
     optimize_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
     optimize_parser.add_argument("--rate", type=float, default=0.0001, help="手续费率")
     optimize_parser.add_argument("--size", type=float, default=10, help="合约乘数")
@@ -98,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--csv", default="", help="从CSV读取K线（datetime,open,high,low,close[,volume]），给定后忽略合成数据")
     backtest_parser.add_argument("--exchange", default="SHFE", help="交易所名称，仅 --csv 使用")
     backtest_parser.add_argument("--interval", default="MINUTE", help="K线周期，仅 --csv 使用")
+    backtest_parser.add_argument(
+        "--stocks",
+        action="append",
+        default=[],
+        help="A 股代码，可重复；给定后从公开行情接口拉前复权日线，忽略 --csv",
+    )
+    backtest_parser.add_argument("--stock-years", type=int, default=3, help="A 股回溯年数")
     backtest_parser.add_argument("--start", default="", help="起止时间，仅数据库数据源使用，如 2024-01-01")
     backtest_parser.add_argument("--end", default="", help="结束时间，仅数据库数据源使用")
     backtest_parser.add_argument("--slippage", type=float, default=0.5, help="滑点")
@@ -112,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_parser.add_argument("--strategy-file", default="", help="策略文件，默认发自 examples/autonomous/strategies")
     portfolio_parser.add_argument(
         "--markets",
-        required=True,
+        default="",
         help="品种清单，逗号分隔 name=csv 对，如 m=path1.csv,rb=path2.csv",
     )
     portfolio_parser.add_argument("--grid", required=True, help="参数网格，如 fast_window=5,10;slow_window=20,40")
@@ -123,6 +141,13 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_parser.add_argument("--capital", type=float, default=1000000.0, help="初始资金")
     portfolio_parser.add_argument("--train-bars", type=int, default=0, help="walk-forward 训练段长度")
     portfolio_parser.add_argument("--test-bars", type=int, default=0, help="walk-forward 测试段长度")
+    portfolio_parser.add_argument(
+        "--stocks",
+        action="append",
+        default=[],
+        help="A 股代码，可重复；给定后按代码名拉前复权日线，忽略 --markets",
+    )
+    portfolio_parser.add_argument("--stock-years", type=int, default=3, help="A 股回溯年数")
     portfolio_parser.add_argument("--output", default="", help="把回测/优化结果写入 JSON 文件")
     promote_parser: argparse.ArgumentParser = subparsers.add_parser(
         "promote", help="按晋升门槛判定回测结论，输出候选策略清单"
@@ -297,9 +322,6 @@ def command_backtest(args: argparse.Namespace) -> int:
         print(f"错误：{args.strategy} 不在 {strategy_path} 中")
         return 2
 
-    # Prefer real data when the caller supplies it. A synthetic series only
-    # proves the plumbing works, so the CSV and database paths are the ones
-    # that can support a real promotion decision.
     from .backtest import (
         load_bars_from_csv,
         load_bars_from_database,
@@ -307,6 +329,10 @@ def command_backtest(args: argparse.Namespace) -> int:
         parse_interval,
     )
 
+    # Real data first, in the order a promotion decision can rely on: a live
+    # A-share pull, then a CSV the operator froze, then the local database.
+    # A synthetic series only proves the plumbing works, so it stays last.
+    stock_symbols: list[str] = list(getattr(args, "stocks", []) or [])
     if args.csv:
         bars = load_bars_from_csv(
             args.csv,
@@ -315,6 +341,19 @@ def command_backtest(args: argparse.Namespace) -> int:
             interval=parse_interval(args.interval),
         )
         print(f"数据来源：CSV {args.csv}，共 {len(bars)} 根K线")
+    elif stock_symbols:
+        code: str = stock_symbols[0]
+        from .stocks import fetch_daily_bars
+
+        try:
+            bars = fetch_daily_bars(code, years=args.stock_years)
+        except (OSError, ValueError) as exc:
+            print(f"错误：{code} 行情加载失败：{exc}")
+            return 2
+        print(
+            f"数据来源：公开行情 {code}，{bars[0].exchange.value}，"
+            f"共 {len(bars)} 根日线（{bars[0].datetime.date()} 起）"
+        )
     elif args.start or args.end:
         start = datetime.fromisoformat(args.start) if args.start else datetime(2024, 1, 1)
         end = (
@@ -541,7 +580,7 @@ def _load_strategy_class(strategy_file: str, strategy_name: str) -> type:
 def _parse_markets(raw: str) -> dict[str, str]:
     """Parse ``name=csv,name=csv`` into a mapping of symbol name to file path."""
     markets: dict[str, str] = {}
-    for chunk in raw.split(","):
+    for chunk in (raw or "").split(","):
         chunk = chunk.strip()
         if not chunk:
             continue
@@ -552,19 +591,80 @@ def _parse_markets(raw: str) -> dict[str, str]:
         if not name or not path.strip():
             raise ValueError(f"--markets 项格式错误：{chunk}")
         markets[name] = path.strip()
-    if not markets:
-        raise ValueError("--markets 至少需要一个品种")
+    # An empty list is allowed when --stocks supplies the instruments instead;
+    # the caller checks that at least one source produced bars.
     return markets
+
+
+def _load_stock_bars(
+    symbols: list[str],
+    years: int = 3,
+) -> dict[str, list[BarData]]:
+    """Fetch forward-adjusted daily bars for each A-share symbol.
+
+    Fetching real bars instead of asking the operator for a CSV export is
+    what makes the promotion path self-driving: the same campaign that
+    decides a candidate can refresh its evidence without a human touching a
+    spreadsheet. One fetch failure is reported and skipped rather than
+    aborting, because a watchlist where one code is delisted should still
+    backtest the rest.
+    """
+
+    bars_by_name: dict[str, Any] = {}
+    symbol: str
+    for symbol in symbols:
+        code: str = symbol.strip()
+        for code in symbol.split(","):
+            code = code.strip()
+            _fetch_one_stock(code, bars_by_name, years)
+    return bars_by_name
+
+
+def _fetch_one_stock(
+    code: str,
+    bars_by_name: dict[str, list[BarData]],
+    years: int,
+) -> None:
+    """Fetch one symbol into the name-keyed bar map.
+
+    Splitting on commas happens here rather than only at the CLI layer,
+    because the same loader is called from three commands and each of them
+    would otherwise repeat the split. A failure is reported and skipped: a
+    watchlist where one code is delisted should still backtest the rest.
+    """
+    if not code:
+        return
+
+    from .stocks import fetch_daily_bars
+
+    try:
+        bars: list[BarData] = fetch_daily_bars(code, years=years)
+    except (OSError, ValueError) as exc:
+        print(f"错误：{code} 行情加载失败：{exc}")
+        return
+    bars_by_name[code] = bars
+    print(
+        f"数据来源：公开行情 {code}，{bars[0].exchange.value}，"
+        f"共 {len(bars)} 根日线（{bars[0].datetime.date()} 起）"
+    )
+
+def _bars_exchange(slices: Mapping[str, Iterable[BarData]]) -> Exchange:
+    """Return the exchange the bars carry, SHFE when the map is empty.
+
+    A stock bar says SSE or SZSE and a futures bar says SHFE, so the strategy's
+    vt_symbol has to be built from the bars rather than from a constant.
+    Hardcoding SHFE would silently mislabel every A-share leg, and the
+    contract lookup inside the engine would then find no contract.
+    """
+    bars: Iterable[BarData]
+    for bars in slices.values():
+        for bar in bars:
+            return bar.exchange
+    return Exchange.SHFE
 
 
 def command_portfolio(args: argparse.Namespace) -> int:
     """Run one strategy per instrument, combine, and optionally validate."""
-    from typing import Any
-
-    from collections.abc import Iterable, Mapping
-
-    from vnpy.trader.object import BarData
-
     from .backtest import (
         PortfolioResult,
         BacktestSettings,
@@ -583,15 +683,25 @@ def command_portfolio(args: argparse.Namespace) -> int:
         return 2
 
     bars_by_name: dict[str, list[BarData]] = {}
-    for name, csv in markets.items():
-        try:
-            bars_by_name[name] = load_bars_from_csv(
-                csv, name, exchange=Exchange.SHFE, interval=Interval.DAILY
-            )
-        except (OSError, ValueError) as exc:
-            print(f"错误：{name} 数据加载失败：{exc}")
-            return 2
-        print(f"数据来源：CSV {csv}（{name}），共 {len(bars_by_name[name])} 根K线")
+    # Real bars first: the CSV path stays available for an operator who wants
+    # a frozen series, but a promotion decision should be able to refresh its
+    # own evidence without a manual export step in between.
+    stock_symbols: list[str] = list(getattr(args, "stocks", []) or [])
+    if stock_symbols:
+        bars_by_name.update(_load_stock_bars(stock_symbols, args.stock_years))
+    else:
+        for name, csv in markets.items():
+            try:
+                bars_by_name[name] = load_bars_from_csv(
+                    csv, name, exchange=Exchange.SHFE, interval=Interval.DAILY
+                )
+            except (OSError, ValueError) as exc:
+                print(f"错误：{name} 数据加载失败：{exc}")
+                return 2
+            print(f"数据来源：CSV {csv}（{name}），共 {len(bars_by_name[name])} 根K线")
+    if not bars_by_name:
+        print("错误：没有任何可用的行情数据")
+        return 2
 
     settings: BacktestSettings = BacktestSettings(
         slippage=args.slippage,
@@ -604,11 +714,12 @@ def command_portfolio(args: argparse.Namespace) -> int:
         config: dict[str, int | float],
         slices: Mapping[str, Iterable[BarData]],
     ) -> PortfolioResult:
+        exchange: Exchange = _bars_exchange(slices)
         strategies: dict[str, Any] = {
             name: strategy_class(
                 cta_engine=None,
                 strategy_name=name,
-                vt_symbol=f"{name}9999.SHFE",
+                vt_symbol=f"{name}9999.{exchange.value}",
                 setting=dict(config),
             )
             for name in slices
