@@ -21,6 +21,7 @@ from typing import Any
 from .calendar import PROFILE_NAMES
 from .config import default_config_path, load_config, validate_config
 from .market import fetch_quotes
+from .promotion import PROMOTE, CandidateReport, evaluate_candidate
 from .runner import (
     APP_REGISTRY,
     GATEWAY_REGISTRY,
@@ -31,18 +32,11 @@ from .runner import (
 
 
 
-
 from vnpy.trader.constant import Exchange
 from vnpy.trader.object import BarData
 
 
-# A walk-forward conclusion needs more than one fold. One fold measures one
-# regime, and a single profitable fold sits comfortably inside the range an
-# unprofitable strategy produces by luck: the reference overnight strategy
-# scored +1235 on its only fold while losing on two of the three folds the
-# same series supports. Declaring the minimum here keeps the verdict honest
-# about how much evidence it rests on.
-MIN_WALK_FORWARD_FOLDS: int = 3
+
 
 
 
@@ -543,29 +537,6 @@ def _pooled_profit_factor(fold_results: list[dict]) -> float:
     return profit / loss
 
 
-def _walk_forward_objections(fold_results: list[dict], aggregate_test: float) -> list[str]:
-    """List the reasons a walk-forward result is not a proven edge.
-
-    A profitable total is not the same as a profitable strategy. One fold
-    samples one regime, and a strategy that loses in two of three folds can
-    still total positive if the winning fold is large enough -- which is
-    exactly what the reference overnight strategy did. Naming each reason
-    separately keeps the verdict about what the evidence supports rather
-    than what the headline number happens to say.
-    """
-    reasons: list[str] = []
-    if len(fold_results) < MIN_WALK_FORWARD_FOLDS:
-        reasons.append(
-            f"折叠数 {len(fold_results)} 少于 {MIN_WALK_FORWARD_FOLDS}"
-        )
-    profitable: int = sum(1 for row in fold_results if row["test_pnl"] > 0)
-    if profitable <= len(fold_results) // 2:
-        reasons.append(f"仅 {profitable}/{len(fold_results)} 个折叠盈利")
-    if aggregate_test <= 0:
-        reasons.append(f"样本外合计 {aggregate_test:.2f} 不为正")
-    return reasons
-
-
 def _average_fold_metric(fold_results: list[dict], key: str) -> float:
     """Average one metric across the folds that actually report it.
 
@@ -878,13 +849,28 @@ def command_portfolio(args: argparse.Namespace) -> int:
     )
     print(f"\n样本外合计 pnl={aggregate_test:.2f}, avg_sharpe={aggregate_test_sharpe:.3f}")
     verdict: int
-    fold_reasons: list[str] = _walk_forward_objections(fold_results, aggregate_test)
-    if fold_reasons:
-        print("结论：组合样本外未取得正期望（" + "；".join(fold_reasons) + "）。")
-        verdict = 1
-    else:
-        print("结论：组合样本外取得正期望。")
-        verdict = 0
+    payload: dict[str, Any] = {
+        "folds": fold_results,
+        "aggregate_test_pnl": aggregate_test,
+        "aggregate_test_sharpe": aggregate_test_sharpe,
+        "aggregate_train_sharpe": _average_fold_metric(fold_results, "train_sharpe"),
+        "aggregate_test_round_trips": sum(
+            int(r.get("test_round_trips", 0)) for r in fold_results
+        ),
+        "aggregate_test_win_rate": _average_fold_metric(fold_results, "test_win_rate"),
+        "aggregate_test_profit_factor": _pooled_profit_factor(fold_results),
+        "aggregate_test_closed_pnl": sum(
+            float(r.get("test_closed_pnl", 0.0)) for r in fold_results
+        ),
+        "aggregate_test_unrealized_pnl": sum(
+            float(r.get("test_unrealized_pnl", 0.0)) for r in fold_results
+        ),
+    }
+    report: CandidateReport = evaluate_candidate("组合", payload)
+    verdict: int = 0 if report.verdict == PROMOTE else 1
+    print(f"晋升判定：{report.verdict}")
+    for reason in report.reasons:
+        print(f"  - {reason}")
     if args.output:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
