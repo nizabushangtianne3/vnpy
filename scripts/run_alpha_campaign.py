@@ -100,7 +100,9 @@ def main() -> int:
         df,
         train_period=("2021-01-01", "2022-12-31"),
         valid_period=("2023-01-01", "2023-12-31"),
-        test_period=("2024-01-01", "2026-11-13"),
+        # Same window the engine trades, so the scored segment and the traded
+        # segment cannot drift apart.
+        test_period=(args.engine_start, args.engine_end),
     )
     dataset.set_label(label_expression(args.hold_days))
     dataset.add_processor("learn", partial(process_drop_na, names=["label"]))
@@ -115,7 +117,9 @@ def main() -> int:
 
     predicted = model.predict(dataset, Segment.TEST)
     # Order must match what ``predict`` sorted its input to, or every
-    # prediction lands on the wrong symbol.
+    # prediction lands on the wrong symbol. The frame already carries that
+    # order, so the sort is a no-op today, but it states the dependency
+    # instead of relying on it surviving an upstream change.
     infer = dataset.fetch_infer(Segment.TEST).sort(["datetime", "vt_symbol"])
     signal = infer.with_columns(pl.Series(predicted).alias("signal"))
     signal = signal.select("datetime", "vt_symbol", "signal")

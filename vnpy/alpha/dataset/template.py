@@ -113,17 +113,27 @@ class AlphaDataset:
 
         args: list[tuple] = [(self.df, name, expression) for name, expression in expressions]
 
-        context: BaseContext = get_context("spawn")
+        # Every task pickles the whole frame, so a pool of N workers serialises
+        # N copies of it before the first expression runs. On a market-sized
+        # frame that is more data than the machine will move, and the pool
+        # stalls without producing a factor. A single worker pays the cost
+        # once instead of N times, which is why max_workers=1 is a real option
+        # and not merely a degenerate one.
+        if max_workers == 1:
+            for arg in tqdm(args, total=len(args)):
+                results.append(calculate_feature(arg))
+        else:
+            context: BaseContext = get_context("spawn")
 
-        pool: Pool
-        with context.Pool(processes=max_workers) as pool:
-            # Calculate all expressions in parallel
-            it: IMapIterator[pl.Series] = pool.imap(calculate_feature, args)
+            pool: Pool
+            with context.Pool(processes=max_workers) as pool:
+                # Calculate all expressions in parallel
+                it: IMapIterator[pl.Series] = pool.imap(calculate_feature, args)
 
-            # Collect results
-            result: pl.Series
-            for result in tqdm(it, total=len(args)):
-                results.append(result)
+                # Collect results
+                result: pl.Series
+                for result in tqdm(it, total=len(args)):
+                    results.append(result)
 
         self.result_df = self.df.with_columns(results)
 
