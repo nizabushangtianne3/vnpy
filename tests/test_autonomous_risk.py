@@ -13,7 +13,13 @@ from vnpy.trader.constant import (
     Status,
 )
 from vnpy.trader.engine import MainEngine
-from vnpy.trader.event import EVENT_ACCOUNT, EVENT_CONTRACT, EVENT_ORDER, EVENT_POSITION
+from vnpy.trader.event import (
+    EVENT_ACCOUNT,
+    EVENT_CONTRACT,
+    EVENT_ORDER,
+    EVENT_POSITION,
+    EVENT_TRADE,
+)
 from vnpy.trader.gateway import BaseGateway
 from vnpy.trader.object import (
     AccountData,
@@ -23,6 +29,7 @@ from vnpy.trader.object import (
     PositionData,
     SubscribeRequest,
     CancelRequest,
+    TradeData,
 )
 
 
@@ -391,4 +398,140 @@ def test_restore_ignores_stale_day() -> None:
         assert snapshot["day_start_balance"] is None
         assert snapshot["current_balance"] == 0.0
     finally:
+        main_engine.close()
+
+
+def seed_stock_contract(main_engine: MainEngine, symbol: str, exchange: Exchange) -> None:
+    """Seed an A-share contract, so the guard can price and bound an order."""
+    contract = ContractData(
+        gateway_name="FAKE",
+        symbol=symbol,
+        exchange=exchange,
+        name="测试股票",
+        product=Product.EQUITY,
+        size=1,
+        pricetick=0.01,
+        min_volume=100,
+        max_volume=1000000,
+        net_position=False,
+    )
+    put(main_engine, EVENT_CONTRACT, contract)
+    wait_until(lambda: main_engine.get_contract(f"{symbol}.{exchange.value}") is not None)
+
+
+def seed_fill(main_engine: MainEngine, symbol: str, exchange: Exchange,
+              direction: Direction, offset: Offset, volume: float = 100.0) -> None:
+    """Report one fill to the event engine, the way a gateway does."""
+    trade = TradeData(
+        gateway_name="FAKE",
+        symbol=symbol,
+        exchange=exchange,
+        orderid="t1",
+        tradeid="t1",
+        direction=direction,
+        offset=offset,
+        price=20.0,
+        volume=volume,
+        datetime=datetime.now(),
+    )
+    put(main_engine, EVENT_TRADE, trade)
+
+
+def close_request(symbol: str, exchange: Exchange) -> OrderRequest:
+    """A close order for one lot."""
+    return OrderRequest(
+        symbol=symbol,
+        exchange=exchange,
+        direction=Direction.SHORT,
+        offset=Offset.CLOSE,
+        type=OrderType.LIMIT,
+        price=20.0,
+        volume=100,
+    )
+
+
+def test_t_plus_one_blocks_selling_stock_bought_today() -> None:
+    """The core A-share rule the paper account does not know."""
+    main_engine, _gateway = build_engine()
+    try:
+        seed_stock_contract(main_engine, "600519", Exchange.SSE)
+        guard = RiskGuard(main_engine, RiskLimits())
+        guard.install()
+        guard.register_events(main_engine.event_engine)
+
+        seed_fill(main_engine, "600519", Exchange.SSE, Direction.LONG, Offset.OPEN)
+        wait_until(lambda: guard._bought_today.get("600519.SSE", 0.0) > 0)
+
+        ok, reason = guard.check_order(
+            close_request("600519", Exchange.SSE), "FAKE"
+        )
+        assert not ok, "a same-session close was allowed through"
+        assert "T+1" in reason
+    finally:
+        guard.uninstall()
+        main_engine.close()
+
+
+def test_t_plus_one_lets_the_sell_through_the_next_session() -> None:
+    """Yesterday's buy is sellable today, so the guard must not freeze it."""
+    main_engine, _gateway = build_engine()
+    try:
+        seed_stock_contract(main_engine, "600519", Exchange.SSE)
+        guard = RiskGuard(main_engine, RiskLimits())
+        guard.install()
+        guard.register_events(main_engine.event_engine)
+
+        seed_fill(main_engine, "600519", Exchange.SSE, Direction.LONG, Offset.OPEN)
+        wait_until(lambda: guard._bought_today.get("600519.SSE", 0.0) > 0)
+
+        # The next session arrives: the clock rolls over, the fills roll with it.
+        guard._filled_day = None
+
+        ok, reason = guard.check_order(
+            close_request("600519", Exchange.SSE), "FAKE"
+        )
+        assert ok, f"a next-session close was refused: {reason}"
+    finally:
+        guard.uninstall()
+        main_engine.close()
+
+
+def test_t_plus_one_does_not_touch_futures_closes() -> None:
+    """SHFE has no T+1, so a futures close must not be refused."""
+    main_engine, _gateway = build_engine()
+    try:
+        seed_contract(main_engine)
+        guard = RiskGuard(main_engine, RiskLimits())
+        guard.install()
+        guard.register_events(main_engine.event_engine)
+
+        seed_fill(main_engine, "rb2410", Exchange.SHFE, Direction.LONG, Offset.OPEN)
+
+        ok, reason = guard.check_order(
+            close_request("rb2410", Exchange.SHFE), "FAKE"
+        )
+        assert ok, f"a futures close was refused: {reason}"
+    finally:
+        guard.uninstall()
+        main_engine.close()
+
+
+def test_t_plus_one_can_be_disabled_for_markets_that_allow_it() -> None:
+    """A market without the rule opts out rather than being second-guessed."""
+    main_engine, _gateway = build_engine()
+    try:
+        seed_stock_contract(main_engine, "600519", Exchange.SSE)
+        guard = RiskGuard(main_engine, RiskLimits(enforce_t_plus_one=False))
+        guard.install()
+        guard.register_events(main_engine.event_engine)
+
+        seed_fill(main_engine, "600519", Exchange.SSE, Direction.LONG, Offset.OPEN)
+        wait_until(lambda: guard._bought_today.get("600519.SSE", 0.0) > 0)
+
+        ok, reason = guard.check_order(
+            close_request("600519", Exchange.SSE), "FAKE"
+        )
+        assert ok, f"a disabled guard still refused the order: {reason}"
+    finally:
+        guard.uninstall()
         main_engine.close()

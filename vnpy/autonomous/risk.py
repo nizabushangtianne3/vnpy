@@ -6,7 +6,7 @@ import threading
 from typing import Any
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from vnpy.event import Event, EventEngine
 from vnpy.trader.constant import Direction, Offset, OrderType, Status
@@ -25,6 +25,12 @@ from vnpy.trader.object import (
 from vnpy.trader.utility import round_to
 
 from .config import RiskLimits
+
+
+# A-share exchanges trade T+1: shares bought today cannot be sold until the
+# next session. Futures and options have no such rule, so a guard that fired
+# on every exchange would reject legitimate closes of a futures position.
+T_PLUS_ONE_EXCHANGES: frozenset[str] = frozenset({"SSE", "SZSE", "BSE"})
 
 
 ACTIVE_STATUSES: frozenset[Status] = frozenset(
@@ -69,6 +75,8 @@ class RiskGuard:
         self._original_send_order: Callable[[OrderRequest, str], str] | None = None
         self._notify: Callable[[str], None] | None = notify
         self._clock: Callable[[], datetime] = clock or datetime.now
+        self._bought_today: dict[str, float] = {}
+        self._filled_day: date | None = None
 
     # ------------------------------------------------------------------ setup
 
@@ -164,6 +172,12 @@ class RiskGuard:
         if not ok_position:
             return False, reason_position
 
+        ok_t1: bool
+        reason_t1: str
+        ok_t1, reason_t1 = self._check_t_plus_one(req)
+        if not ok_t1:
+            return False, reason_t1
+
         with self._lock:
             self.state.order_count += 1
         return True, ""
@@ -202,6 +216,54 @@ class RiskGuard:
             )
         return True, ""
 
+    def _check_t_plus_one(self, req: OrderRequest) -> tuple[bool, str]:
+        """Refuse to sell A-shares bought on today's session.
+
+        The reference strategy enforces T+1 against its own fills, which is the
+        only enforcement the backtest has. Live trading needs a second one,
+        because the paper account and most stock gateways do not know the rule
+        and would happily accept an order the exchange rejects the next
+        morning -- at which point the position is real and unsellable. This
+        guard is that second enforcement, and it keys off the fills the guard
+        itself saw so it holds even when a strategy miscounts.
+        """
+        if not self.limits.enforce_t_plus_one:
+            return True, ""
+        if req.direction != Direction.SHORT or req.offset != Offset.CLOSE:
+            return True, ""
+        if not self._is_stock_exchange(req.vt_symbol):
+            return True, ""
+
+        with self._lock:
+            self._roll_over_filled_day()
+            bought: float = self._bought_today.get(req.vt_symbol, 0.0)
+
+        if bought > 0:
+            return (
+                False,
+                f"{req.vt_symbol} T+1 限制：当日买入 {bought:g} 股不能当日卖出",
+            )
+        return True, ""
+
+    def _is_stock_exchange(self, vt_symbol: str) -> bool:
+        """Whether this vt_symbol trades on a T+1 stock exchange."""
+        if "." not in vt_symbol:
+            return False
+        exchange_name: str = vt_symbol.split(".")[-1].upper()
+        return exchange_name in T_PLUS_ONE_EXCHANGES
+
+    def _roll_over_filled_day(self) -> None:
+        """Clear today's fills once the session date changes.
+
+        Called with the lock held. Yesterday's buys became sellable at this
+        session's close, so keeping them would freeze a position that is in
+        fact free.
+        """
+        today: date = self._clock().date()
+        if self._filled_day != today:
+            self._filled_day = today
+            self._bought_today.clear()
+
     # --------------------------------------------------------------- events
 
     def process_order_event(self, event: Event) -> None:
@@ -211,8 +273,14 @@ class RiskGuard:
             self._emit(f"委托被拒单：{order.vt_orderid}")
 
     def process_trade_event(self, event: Event) -> None:
-        """Update daily counters on fills."""
-        _trade: TradeData = event.data
+        """Record today's buys so the next session's sells can be checked."""
+        trade: TradeData = event.data
+        with self._lock:
+            self._roll_over_filled_day()
+            if trade.direction == Direction.LONG and trade.offset == Offset.OPEN:
+                self._bought_today[trade.vt_symbol] = (
+                    self._bought_today.get(trade.vt_symbol, 0.0) + trade.volume
+                )
 
     def process_account_event(self, event: Event) -> None:
         """Update equity baseline, peak and check daily loss limits."""

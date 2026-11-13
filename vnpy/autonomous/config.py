@@ -43,6 +43,7 @@ class RiskLimits:
     max_drawdown: float = 0                  # drawdown cap from session peak equity
     kill_switch_on_breach: bool = True       # flatten and block new entries
     allow_reduce_when_armed: bool = True     # closing orders still allowed
+    enforce_t_plus_one: bool = True          # reject selling shares bought today
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> RiskLimits:
