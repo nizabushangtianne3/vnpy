@@ -120,7 +120,7 @@ commissions under 0.7 percent. Against the gates that is sharpe 1.14 and
 commission 0.003, both of which clear. The rb20 mt0.15 cell is the one that
 meets every trading gate.
 
-## ICIR is the gate that does not move, and why
+## ICIR resisted the noise-reduction attempts
 
 ICIR is ic_mean over the standard deviation of the daily IC. Two attempts to
 raise it by reducing estimator noise both failed to reach 0.5, and the second
@@ -239,3 +239,41 @@ fundamental set rather than another reweighting of Alpha158's price-and-volume
 candlesticks) and a universe that keeps its size when the market narrows. Both
 need a data source this repository does not fetch yet, which is the next thing to
 build rather than a parameter to set.
+
+## Refitting on a moving window trades IC for stability
+
+A single fit scored over two years decays. The fitted IC falls from 0.0687 in
+2024 to 0.0408 in 2025 on the very same signal, which is a stale model rather
+than a market that stopped paying. ``alpha_gate.py --rolling TRAIN STEP``
+refits every ``STEP`` sessions on the most recent ``TRAIN`` sessions and
+concatenates the out-of-sample predictions, laid out on the dataset's own
+trading calendar.
+
+The window stops ``horizon`` sessions short of the block it scores, because the
+label reaches ``horizon`` sessions forward: training on a session whose label
+reaches into the scoring block would fit the model on ground truth it is about
+to be graded against.
+
+Four windows on the same features and the same clean split:
+
+| rolling (train, step) | IC mean | ICIR | IC positive |
+| --- | --- | --- | --- |
+| single fit | 0.0520 | 0.349 | 0.632 |
+| 240, 60 | 0.0264 | 0.318 | 0.651 |
+| 500, 120 | 0.0344 | 0.423 | 0.666 |
+| 900, 250 | 0.0419 | 0.485 | 0.705 |
+| 1400, 300 | 0.0247 | 0.527 | 0.667 |
+
+The pattern is real and it is not free. A short training window makes the model
+worse than not refitting at all (240, 60 loses on both axes), and ICIR improves
+monotonically as the window grows - 0.318, 0.423, 0.485, 0.527 - until at 1400
+sessions ICIR clears 0.50 while IC mean falls back to 0.0247 and fails its own
+gate. So the two gates pull against each other: refitting stabilises the daily
+IC, and it does so by weakening the signal the recency brought in.
+
+The best cell is 900, 250, which misses only ICIR, by 0.015, and is the only
+configuration that clears IC mean, IC positive share and gets ICIR within
+touching distance at the same time. That is the closest this signal has come to
+clearing all five gates, and the reason it does not is that IC and ICIR are
+being asked for by the same 158 price-and-volume factors rather than by a
+signal that is strong on both.
