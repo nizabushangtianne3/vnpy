@@ -41,7 +41,7 @@ from vnpy_ctastrategy import (
     TickData,
     TradeData,
 )
-from vnpy.trader.constant import Direction, Offset
+from vnpy.trader.constant import Direction, Interval, Offset
 
 
 class OvernightHoldStrategy(CtaTemplate):
@@ -192,6 +192,8 @@ class OvernightHoldStrategy(CtaTemplate):
         """
         if self.bars_since_entry < 1:
             return False
+        if self._is_next_session(bar):
+            return True
         if self.bars_since_entry > 1:
             # Never hold past a second night.
             return True
@@ -207,6 +209,17 @@ class OvernightHoldStrategy(CtaTemplate):
         bar, and treating it as one would sell intraday instead of overnight.
         """
         return bar.datetime.hour == 9 and bar.datetime.minute < 35
+
+    def _is_next_session(self, bar: BarData) -> bool:
+        """Whether this bar is already the session after the entry session.
+
+        A daily bar carries a midnight timestamp, so the clock cannot find a
+        session boundary on it: a clock test would never fire and the position
+        would ride into a second night, which is a different strategy with a
+        different risk profile. On a daily series bar distance *is* session
+        distance, so the next bar is the next session and the gap has landed.
+        """
+        return bar.interval == Interval.DAILY and self.bars_since_entry >= 1
 
     def _exit_position(self, bar: BarData) -> None:
         """Close the whole position into the opening bar.

@@ -137,7 +137,9 @@ def test_a_position_is_closed_on_a_later_bar_not_its_entry_bar() -> None:
     strategy.inited = True
     strategy.trading = True
 
-    for offset in range(1, 8):
+    # Nine bars, so the loop ends on an exit rather than on a fresh entry:
+    # a daily hold now closes on the very next bar and re-enters right after.
+    for offset in range(1, 9):
         strategy.on_bar(_bar(offset, 14, 50, 100.0 + offset, 5000.0))
 
     orders = [(o[0].name, o[1].name) for o in engine.orders]
@@ -175,3 +177,45 @@ def test_every_close_follows_an_open_by_at_least_one_bar() -> None:
             # A close with nothing held is a same-bar round trip.
             assert held > 0, "a close was sent without an open before it"
             held -= 100
+
+
+def test_a_daily_hold_is_closed_on_the_next_daily_bar() -> None:
+    """On daily bars, one overnight means exactly the next bar.
+
+    A daily bar carries a midnight timestamp, so a clock test for an opening
+    bar never fires and the position would ride into a second night. Bar
+    distance is the only honest measure on a daily series, and the round trip
+    the strategy books has to be an overnight gap, not a two-day hold.
+    """
+    strategy, engine = _make_strategy(
+        trend_window=3, range_window=3, volume_window=2, volume_factor=0.1
+    )
+    strategy.on_init()
+    strategy.inited = True
+    strategy.trading = True
+
+    events: list[tuple[int, str]] = []
+    for offset in range(1, 16):
+        strategy.on_bar(_bar(offset, 14, 50, 100.0 + offset, 5000.0))
+        if engine.orders:
+            events.append((offset, engine.orders[-1][1].name))
+
+    opens = [index for index, kind in events if kind == "OPEN"]
+    closes = [index for index, kind in events if kind == "CLOSE"]
+    assert opens, "the strategy never opened a position"
+    assert closes, "no daily hold was ever closed"
+    # The series can end on a fresh open, so a trailing unmatched open is
+    # allowed; a close without an open before it is not.
+    assert len(closes) == len(opens) or len(closes) == len(opens) - 1, (
+        f"{len(closes)} closes against {len(opens)} opens"
+    )
+
+    # The close must land on the bar right after its open: one session later
+    # is the overnight gap, two sessions later is a two-night hold. A trailing
+    # open with no close is the series ending mid-hold, so it is dropped rather
+    # than paired against someone else's close.
+    for open_index, close_index in zip(opens[: len(closes)], closes, strict=True):
+        assert close_index - open_index == 1, (
+            f"open at bar {open_index} closed at bar {close_index}: "
+            "a daily hold ran past the next bar, which is not an overnight gap"
+        )

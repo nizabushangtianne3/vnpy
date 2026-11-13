@@ -38,6 +38,7 @@ from vnpy.trader.object import BarData
 from .market import resolve_secid
 
 HIST_BASE_URL: str = "https://push2his.eastmoney.com"
+MARKET_BASE_URL: str = "https://push2.eastmoney.com"
 
 # The kline host drops the connection outright for a while after a burst, and
 # the block outlasts a five minute pause. These gateways are the user's own
@@ -104,13 +105,18 @@ def _throttle() -> None:
     _last_request_at = time.monotonic()
 
 
-def _kline_urls(path: str) -> list[str]:
+def _route_urls(base: str, path: str) -> list[str]:
     """Build the request URL list, direct host first then the gateways."""
-    urls: list[str] = [f"{HIST_BASE_URL}{path}"]
+    urls: list[str] = [f"{base}{path}"]
     prefix: str
     for prefix in PROXY_PREFIXES:
-        urls.append(f"{prefix}{HIST_BASE_URL.replace('https://', '')}{path}")
+        urls.append(f"{prefix}{base.replace('https://', '')}{path}")
     return urls
+
+
+def _kline_urls(path: str) -> list[str]:
+    """Route list for the kline host."""
+    return _route_urls(HIST_BASE_URL, path)
 
 
 def _kline_url(path: str, attempt: int) -> str:
@@ -208,6 +214,100 @@ def parse_klines(klines: object) -> list[BarData]:
     if not bars and dropped:
         raise ValueError("no parseable bars in the klines payload")
     return bars
+
+def parse_market_list(payload: object) -> list[tuple[str, str]]:
+    """Parse a clist payload into (code, name) pairs.
+
+    The market list is what turns a three-stock backtest into a real screen.
+    The same public host that serves bars also serves the tradable universe,
+    so a campaign can pick its own candidates instead of inheriting whatever
+    three codes an operator happened to type. Names are kept, because a name
+    prefixed with ST marks an instrument under delisting risk whose price band
+    is 5 percent rather than 10, and mixing those into a screen would compare
+    strategies across different rules.
+    """
+    if not isinstance(payload, dict):
+        return []
+    data: object = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    diff: object = data.get("diff")
+    if not isinstance(diff, list):
+        return []
+
+    out: list[tuple[str, str]] = []
+    entry: object
+    for entry in diff:
+        if not isinstance(entry, dict):
+            continue
+        code: str = str(entry.get("f12", "")).strip()
+        if not code:
+            continue
+        out.append((code, str(entry.get("f14", "")).strip()))
+    return out
+
+
+def fetch_market_universe() -> list[tuple[str, str]]:
+    """Fetch the whole A-share universe, one page at a time.
+
+    The host silently caps a page at 100 rows whatever pz asks for, so a
+    single large request returns 100 of 1846 and looks complete. Walking the
+    pages is the only way to see the whole list.
+    """
+    collected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    page: int = 1
+    attempt_index: int | None = None
+    while page <= 40:
+        _throttle()
+        try:
+            session: requests.Session = requests.Session()
+            try:
+                session.trust_env = False
+                routes: list[str] = _route_urls(MARKET_BASE_URL, "/api/qt/clist/get")
+                response: requests.Response = session.get(
+                    routes[attempt_index % len(routes)] if attempt_index is not None else routes[0],
+                    params={
+                        "pn": str(page),
+                        "pz": "100",
+                        "po": "1",
+                        "np": "1",
+                        "fltt": "2",
+                        "fid": "f12",
+                        # Main boards only: Shanghai plus Shenzhen, trades
+                        # excluded, so the list is equities and not indices.
+                        "fs": "m:1+t:2,m:0+t:2",
+                        "fields": "f12,f13,f14",
+                    },
+                    headers=_headers(),
+                    timeout=REQUEST_TIMEOUT_SECS,
+                )
+            finally:
+                session.close()
+            response.raise_for_status()
+            body: object = response.json()
+        except Exception:
+            # The direct host resets when it has been hit too often, and a
+            # gateway returns an HTML page instead of JSON. Rotate through the
+            # routes for this page before giving up on it.
+            attempt_index = 0 if attempt_index is None else attempt_index + 1
+            if attempt_index >= len(PROXY_PREFIXES) + 1:
+                break
+            continue
+        attempt_index = None
+        page_pairs: list[tuple[str, str]] = parse_market_list(body)
+        if not page_pairs:
+            break
+        for code, name in page_pairs:
+            if code in seen:
+                continue
+            seen.add(code)
+            collected.append((code, name))
+        if len(page_pairs) < 100:
+            break
+        page += 1
+    return collected
+
 
 
 def exchange_for_secid(secid: str) -> Exchange:
