@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -27,7 +28,14 @@ from vnpy.alpha.strategy.strategies.equity_demo_strategy import EquityDemoStrate
 from vnpy.trader.constant import Interval
 
 
-DEFAULT_LAB: str = ".vntrader/alpha_lab"
+DEFAULT_BARS: str = os.environ.get(
+    "VNPY_BARS_DIR",
+    "D:/Codex/work/vnpy-alpha-cache/stock_bars",
+)
+DEFAULT_LAB: str = os.environ.get(
+    "VNPY_ALPHA_LAB",
+    "D:/Codex/work/vnpy-alpha-cache/alpha_lab",
+)
 
 
 def label_expression(hold_days: int) -> str:
@@ -39,6 +47,8 @@ def main() -> int:
     """Run the pilot campaign."""
     parser = argparse.ArgumentParser(description="Alpha pilot on a symbol sample")
     parser.add_argument("--codes", default="", help="comma separated symbols, or a file holding them")
+    parser.add_argument("--bars", default=DEFAULT_BARS, help="directory holding cached CSV bars")
+    parser.add_argument("--lab", default=DEFAULT_LAB, help="AlphaLab store path")
     parser.add_argument("--sample", type=int, default=300, help="random sample size when --codes is empty")
     parser.add_argument("--start", default="2021-01-01")
     parser.add_argument("--end", default="2026-11-13")
@@ -70,7 +80,7 @@ def main() -> int:
     else:
         import random
 
-        universe = load_universe_codes()
+        universe = load_universe_codes(args.bars)
         random.seed(42)
         codes = sorted(random.sample(universe, min(args.sample, len(universe))))
 
@@ -78,13 +88,13 @@ def main() -> int:
 
     series: dict[str, list] = {}
     for code in codes:
-        bars = read_cached_bars(code)
+        bars = read_cached_bars(code, args.bars)
         if len(bars) >= 120:
             series[code] = bars
     codes = sorted(series)
     print(f"达到 120 根日线的标的：{len(codes)}")
 
-    lab = AlphaLab(DEFAULT_LAB)
+    lab = AlphaLab(args.lab)
     vt_symbols: list[str] = []
     components: dict[str, list[str]] = {}
     for code in codes:
