@@ -68,6 +68,14 @@ def main() -> int:
     parser.add_argument("--valid-end", nargs=2, default=["2023-01-01", "2023-12-31"])
     parser.add_argument("--engine-start", default="2024-01-01")
     parser.add_argument("--engine-end", default="2026-11-13")
+    parser.add_argument(
+        "--rolling",
+        nargs=2,
+        type=int,
+        default=None,
+        metavar=("TRAIN_WINDOW", "STEP"),
+        help="refit every STEP sessions on the last TRAIN_WINDOW sessions",
+    )
     args = parser.parse_args()
 
     from vnpy.autonomous.alpha_loader import load_universe_codes, read_cached_bars
@@ -173,20 +181,35 @@ def main() -> int:
         lab.save_dataset(args.dataset_name, dataset)
         print(f"数据集已缓存：{args.dataset_name}")
 
-    model = LgbModel(seed=42)
-    model.fit(dataset)
+    if args.rolling:
+        # The rolling path already averages the seeds it is given, and it lives
+        # in alpha_gate so that the IC grading and the backtest score the same
+        # signal rather than two implementations of it.
+        import importlib.util
 
-    predicted = model.predict(dataset, Segment.TEST)
-    # ``predict`` sorts the inference frame by datetime and vt_symbol before
-    # building its input matrix, and the frame ``fetch_infer`` already returns
-    # happens to carry the same order, so this sort is a no-op today. It is kept
-    # because it states the dependency rather than relying on the order being
-    # preserved by a coincidence: dropping it changed nothing on 294 symbols
-    # (1.1216 percent, 507 trades either way), but an upstream change that
-    # stopped sorting would silently transpose the signal.
-    infer = dataset.fetch_infer(Segment.TEST).sort(["datetime", "vt_symbol"])
-    signal = infer.with_columns(pl.Series(predicted).alias("signal"))
-    signal = signal.select("datetime", "vt_symbol", "signal")
+        gate_spec = importlib.util.spec_from_file_location(
+            "alpha_gate", str(Path(__file__).with_name("alpha_gate.py"))
+        )
+        gate = importlib.util.module_from_spec(gate_spec)
+        gate_spec.loader.exec_module(gate)
+        train_window, step = args.rolling
+        signal = gate.predict_rolling(dataset, [42], train_window, step)
+        print(f"滚动重训信号：{signal.height} 行")
+    else:
+        model = LgbModel(seed=42)
+        model.fit(dataset)
+
+        predicted = model.predict(dataset, Segment.TEST)
+        # ``predict`` sorts the inference frame by datetime and vt_symbol before
+        # building its input matrix, and the frame ``fetch_infer`` already returns
+        # happens to carry the same order, so this sort is a no-op today. It is
+        # kept because it states the dependency rather than relying on the order
+        # being preserved by a coincidence: dropping it changed nothing on 294
+        # symbols (1.1216 percent, 507 trades either way), but an upstream change
+        # that stopped sorting would silently transpose the signal.
+        infer = dataset.fetch_infer(Segment.TEST).sort(["datetime", "vt_symbol"])
+        signal = infer.with_columns(pl.Series(predicted).alias("signal"))
+        signal = signal.select("datetime", "vt_symbol", "signal")
 
     engine = BacktestingEngine(lab)
     engine.set_parameters(

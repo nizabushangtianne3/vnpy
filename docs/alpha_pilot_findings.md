@@ -277,3 +277,29 @@ touching distance at the same time. That is the closest this signal has come to
 clearing all five gates, and the reason it does not is that IC and ICIR are
 being asked for by the same 158 price-and-volume factors rather than by a
 signal that is strong on both.
+
+## The rolling signal holds the trading gates, and improves two of them
+
+``alpha_pilot.py --rolling TRAIN STEP`` drives the backtest off the same rolling
+signal the gate grades, imported from ``alpha_gate`` rather than reimplemented,
+so the IC that was measured and the signal that was traded are one thing.
+
+At rb20 with a 0.15 turnover cap, on 778 symbols over the clean split:
+
+| | return% | sharpe | drawdown% | turnover | commission% |
+| --- | --- | --- | --- | --- | --- |
+| single fit | 5.27 | 1.141 | -1.52 | 2.85 | 0.28 |
+| rolling 900, 250 | 5.27 | 1.146 | -1.26 | 2.22 | 0.22 |
+
+The return is unchanged and every risk figure improves, which is what a genuinely
+fresher model looks like rather than a fitted one. Against the five gates the
+rolling configuration clears IC mean (0.0419), IC positive share (0.705),
+sharpe (1.15), and commission share (0.0022), and misses only ICIR at 0.485
+against 0.50.
+
+That is one number away from the whole set, and the two ways to reach it that
+have not worked are worth naming so they are not tried again: averaging three
+seeds over the rolling fit moved ICIR from 0.485 to 0.461 and IC positive share
+the wrong way, and rehorizoning the rolling label (hold_days 3 and 8) produced
+0.180 and 0.399. ICIR is the gate that remains, and it is a property of the
+signal rather than of the book that trades it.
