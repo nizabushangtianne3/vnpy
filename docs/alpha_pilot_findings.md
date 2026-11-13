@@ -164,3 +164,78 @@ Nothing here should be graded as ready for the paper path until the ICIR gate
 clears on a window the model never saw, because a signal whose daily IC half
 vanishes in a different dispersion regime is not a signal a live book can size
 against.
+
+## What the horizon knob actually does
+
+``alpha_gate.py --hold-days N`` rehorizons without recomputing the 158 factors,
+because ``result_df`` keeps the raw ``close`` and the horizon is one expression
+over it. The label is written into ``result_df``, ``raw_df``, ``infer_df`` and
+``learn_df`` together - ``LgbModel`` trains off ``learn_df`` and ``fetch_infer``
+scores off ``infer_df``, so changing one without the others would fit on one
+horizon and score on another.
+
+While building that, the expression ``ts_delay(close, -5) / ts_delay(close, -1)
+- 1`` was suspected of being backward-looking, which would have meant every IC
+on this page was measuring momentum rather than prediction. It is not: the
+negative window shifts the series forward, and against the realised forward
+return the cached label correlates at 0.9046, while a hand-computed six-bar
+frame matches the expression digit for digit. The label is the return from the
+next tradeable session to the horizon, which is the window a T+1 market lets a
+book capture.
+
+The horizon does not behave the way a longer holding period would, because the
+denominator moves with the numerator: at ``hold_days=n`` the expression compares
+close at n sessions ahead against close at one session ahead, so the measured
+window widens by a single bar rather than by n. Two horizons on the same
+features and the same clean split:
+
+| hold_days | IC mean | ICIR | IC positive |
+| --- | --- | --- | --- |
+| 5 | 0.0520 | 0.349 | 0.632 |
+| 10 | 0.0429 | 0.294 | 0.599 |
+
+Ten is worse than five on every axis. Widening the measurement window by one
+bar does not buy a better signal, which is the same verdict the seed ensemble
+and the feature normalisation already received from different directions. A
+genuine longer-horizon signal would need the denominator pinned at the entry
+bar instead, and that is a change to the label rather than to its window.
+
+## What ICIR 0.5 would actually take
+
+At the measured IC mean of 0.0520 and ICIR 0.349, the daily IC has a standard
+deviation of 0.1489. Reaching 0.5 means one of two things:
+
+* hold the mean and cut the standard deviation by 30 percent, from 0.1489 to
+  at most 0.1039, or
+* hold the standard deviation and raise the mean from 0.0520 to 0.0745, which
+  is 2.4 times today's level.
+
+Neither is available from the levers this repository has already tried. The seed
+ensemble bought 0.019 of ICIR. The feature normalisation lost IC outright. The
+longer horizon lost both. The dispersion is not estimator noise - the label's own
+cross-sectional standard deviation is 5.64 percent a session over 617 symbols, so
+the daily IC swings with the market and not with the model.
+
+Given the label IC is already positive every year (2024 0.0687, 2025 0.0408,
+2026 0.0454), the honest reading is that a 0.5 target of 0.04 mean and 0.5 ICIR
+are asking for different quantities from the same signal: the mean is a
+level question, which 778 symbols already clears, and the ICIR is a stability
+question, which needs a signal that does not decay when the market's dispersion
+changes. A different factor set, not a better-tuned one. This goal is not
+complete because of that, not because the feature integration is unfinished. The
+trading gates do clear, and they clear by a lot:
+
+| gate | target | measured at rb20 mt0.15 | verdict |
+| --- | --- | --- | --- |
+| sharpe | >= 1.0 | 1.141 | clears |
+| commission / capital | <= 0.02 | 0.0028 | clears |
+| rank IC mean | >= 0.04 | 0.0520 | clears |
+| IC positive share | >= 0.55 | 0.632 | clears |
+| ICIR | >= 0.50 | 0.349 | short |
+
+The remaining work is to raise the signal's own stability, and the two ways that
+have not been tried are a factor set built for a longer horizon (a volatility or
+fundamental set rather than another reweighting of Alpha158's price-and-volume
+candlesticks) and a universe that keeps its size when the market narrows. Both
+need a data source this repository does not fetch yet, which is the next thing to
+build rather than a parameter to set.

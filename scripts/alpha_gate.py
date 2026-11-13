@@ -30,6 +30,7 @@ import polars as pl
 from pathlib import Path
 
 from vnpy.alpha import AlphaLab, Segment
+from vnpy.alpha.dataset.utility import calculate_by_expression
 from vnpy.alpha.model.models.lgb_model import LgbModel
 
 
@@ -76,8 +77,44 @@ def predict_ensemble(dataset, seeds: list[int]) -> pl.DataFrame:
     return total
 
 
-def rank_ic(dataset, seeds: list[int]) -> dict:
+def relabel(dataset, hold_days: int) -> None:
+    """Replace the label with a different horizon, reusing the factors.
+
+    The 158 features are the expensive part of this pipeline and they do not
+    depend on the horizon, only the label does. ``result_df`` keeps the raw
+    ``close`` column, so a new horizon is one expression over a column that is
+    already there. The label is written back to every frame that carries it,
+    because ``fetch_infer`` reads ``infer_df`` and ``LgbModel`` reads
+    ``learn_df``: changing one and not the others would leave the model scoring
+    against a horizon it was not fitted on.
+    """
+    expression = f"ts_delay(close, -{hold_days}) / ts_delay(close, -1) - 1"
+    # calculate_by_expression is the entry point prepare_data itself uses for
+    # the 158 factors, so the horizon is evaluated by the code that already has
+    # the ts_delay helper registered rather than by a second parser.
+    computed = calculate_by_expression(dataset.result_df, expression)
+    # ts_delay walks the frame per symbol, so the component order it returns is
+    # the frame's own; joining on datetime and symbol preserves that alignment.
+    label = computed.select(["datetime", "vt_symbol", "data"]).rename({"data": "label"})
+    dataset.label_expression = expression
+    dataset.result_df = dataset.result_df.drop("label").join(
+        label, on=["datetime", "vt_symbol"], how="inner"
+    )
+    dataset.raw_df = dataset.raw_df.drop("label").join(
+        label, on=["datetime", "vt_symbol"], how="inner"
+    )
+    dataset.infer_df = dataset.infer_df.drop("label").join(
+        label, on=["datetime", "vt_symbol"], how="inner"
+    )
+    dataset.learn_df = dataset.learn_df.drop("label").join(
+        label, on=["datetime", "vt_symbol"], how="inner"
+    )
+
+
+def rank_ic(dataset, seeds: list[int], hold_days: int | None = None) -> dict:
     """Score the fitted signal against the label on the TEST segment."""
+    if hold_days is not None:
+        relabel(dataset, hold_days)
     infer = predict_ensemble(dataset, seeds)
     joined = infer.join(
         dataset.result_df.select(["datetime", "vt_symbol", "label"]),
@@ -115,6 +152,12 @@ def main() -> int:
         default=[42],
         help="booster seeds to average; more seeds lowers IC variance",
     )
+    parser.add_argument(
+        "--hold-days",
+        type=int,
+        default=None,
+        help="label horizon in sessions; reuses the cached factors",
+    )
     parser.add_argument("--lab", default=DEFAULT_LAB, help="AlphaLab store path")
     parser.add_argument("--json", default="", help="write the report to this path")
     args = parser.parse_args()
@@ -139,8 +182,10 @@ def main() -> int:
         print("数据划分不干净，本轮数字不可用于判定：" + "; ".join(contamination))
         return 3
 
-    ic = rank_ic(dataset, args.seeds)
+    ic = rank_ic(dataset, args.seeds, args.hold_days)
     print(f"参与集成的种子：{args.seeds}")
+    if args.hold_days:
+        print(f"预测持仓周期：{args.hold_days} 个交易日（复用已缓存因子）")
 
     report: dict = {
         "dataset": args.dataset,
@@ -149,6 +194,7 @@ def main() -> int:
         "test": list(test),
         "ic": ic,
         "seeds": args.seeds,
+        "hold_days": args.hold_days,
         "gates": {
             "ic_mean": {"value": ic["ic_mean"], "target": IC_MEAN_MIN, "pass": ic["ic_mean"] >= IC_MEAN_MIN},
             "icir": {"value": ic["icir"], "target": ICIR_MIN, "pass": ic["icir"] >= ICIR_MIN},
