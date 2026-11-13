@@ -25,6 +25,7 @@ holder, which is exactly the series a strategy would be asked to survive.
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -37,8 +38,27 @@ from vnpy.trader.object import BarData
 
 from .market import resolve_secid
 
+logger: logging.Logger = logging.getLogger("vnpy.autonomous.stocks")
+
 HIST_BASE_URL: str = "https://push2his.eastmoney.com"
 MARKET_BASE_URL: str = "https://push2.eastmoney.com"
+
+# A second public source, tried before the Eastmoney routes rather than after.
+# The kline host drops the connection outright when it is unhappy and the
+# block outlasts a five minute pause, so a single outage stops every campaign
+# that needs bars. Sina answers one request with the whole available history
+# and is a different host, so its availability is independent of that block.
+# Measured on 2026-11-13: Shanghai and Shenzhen codes each return 3000 daily
+# bars back to 2014 in a single request, and neither retries nor 520s.
+SINA_KLINE_URL: str = (
+    "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php"
+    "/CN_MarketData.getKLineData"
+)
+# Sina's daily scale is minutes, and it caps one answer at 3000 rows. Asking
+# for more returns exactly 3000, so the ceiling is a request shape rather
+# than something the caller has to negotiate.
+SINA_MAX_BARS: int = 3000
+SINA_SCALE: str = "240"
 
 # The kline host drops the connection outright for a while after a burst, and
 # the block outlasts a five minute pause. These gateways are the user's own
@@ -65,6 +85,7 @@ INTERVAL_CODES: dict[Interval, str] = {
 }
 
 REQUEST_TIMEOUT_SECS: float = 15.0
+SINA_TIMEOUT_SECS: float = 25.0
 MAX_RETRIES: int = 3
 RETRY_BACKOFF_SECS: float = 0.4
 
@@ -323,6 +344,182 @@ def _exchange_for_symbol(symbol: str) -> Exchange:
     return exchange_for_secid(resolve_secid(symbol))
 
 
+SINA_LIST_URL: str = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php"
+    "/Market_Center.getHQNodeData"
+)
+# The list endpoint caps one page at 80 rows whatever ``num`` asks for, so the
+# universe is walked page by page exactly like the Eastmoney host caps ``pz``.
+SINA_PAGE_SIZE: int = 80
+SINA_MAX_PAGES: int = 40
+
+
+def parse_sina_market_list(payload: object) -> list[tuple[str, str]]:
+    """Parse Sina's market list into (code, name) pairs.
+
+    Names are kept because a name prefixed with ST marks an instrument under
+    delisting risk whose daily band is 5 percent rather than 10, and screening
+    those together would compare strategies across different rules.
+    """
+    if not isinstance(payload, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        code: str = str(entry.get("code", "")).strip()
+        if not code:
+            continue
+        out.append((code, str(entry.get("name", "")).strip()))
+    return out
+
+
+def fetch_market_universe_from_sina() -> list[tuple[str, str]]:
+    """Fetch the whole tradable A-share universe from the public list.
+
+    Same purpose as ``fetch_market_universe`` but from a host whose
+    availability is independent of the Eastmoney block: when the quote host
+    will not answer, a campaign can still pick its own candidates.
+    """
+    collected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for page in range(1, SINA_MAX_PAGES + 1):
+        _throttle()
+        session = requests.Session()
+        try:
+            session.trust_env = False
+            response = session.get(
+                SINA_LIST_URL,
+                params={
+                    "page": str(page),
+                    "num": str(SINA_PAGE_SIZE),
+                    "sort": "symbol",
+                    "asc": "1",
+                    "node": "hs_a",
+                },
+                headers=_headers(),
+                timeout=SINA_TIMEOUT_SECS,
+            )
+        finally:
+            session.close()
+        response.raise_for_status()
+        try:
+            payload: object = response.json()
+        except ValueError as exc:
+            raise ValueError("sina market list returned non-json") from exc
+        rows: list[tuple[str, str]] = parse_sina_market_list(payload)
+        fresh: list[tuple[str, str]] = [r for r in rows if r[0] not in seen]
+        if not fresh:
+            break
+        for code, name in fresh:
+            seen.add(code)
+            collected.append((code, name))
+        if len(rows) < SINA_PAGE_SIZE:
+            break
+    if not collected:
+        raise ValueError("no universe from sina")
+    return collected
+
+
+def _sina_symbol(symbol: str) -> str:
+    """Map a bare symbol to Sina's ``sh``/``sz`` prefixed form.
+
+    Sina has no exchange object to give back, so the market has to be inferred
+    from the code exactly as ``resolve_secid`` infers it for Eastmoney. Getting
+    this wrong silently asks the wrong exchange and gets an empty answer, which
+    reads as a delisted symbol rather than a bad request.
+    """
+    text: str = symbol.strip().upper()
+    code, _, market = text.partition(".")
+    if market in ("SZ", "SZSE"):
+        return f"sz{code}"
+    if market in ("BJ", "BSE"):
+        return f"bj{code}"
+    if market in ("SH", "SSE"):
+        return f"sh{code}"
+    # The prefix is the exchange's own code range, learned from the list
+    # endpoint rather than guessed: 6 is Shanghai, 0 and 3 are Shenzhen, and
+    # 4, 8 and 920* are Beijing. A Beijing code sent to Shenzhen asks the wrong
+    # exchange and gets an empty answer that reads as a delisted symbol.
+    if code.startswith("920") or code.startswith("4") or code.startswith("8"):
+        return f"bj{code}"
+    if code.startswith("6"):
+        return f"sh{code}"
+    return f"sz{code}"
+
+
+def _parse_sina_rows(payload: object) -> list[BarData]:
+    """Parse Sina's kline rows into bars, or an empty list when malformed.
+
+    Rows arrive as ``[day, open, high, low, close, volume]`` with prices already
+    in yuan and already forward-adjusted, which is the only adjustment level a
+    backtest should be built on. A row that does not parse is dropped rather
+    than raising: one bad row in 3000 is noise, and refusing the whole series
+    would turn a bad row into a missing instrument.
+    """
+    if not isinstance(payload, list):
+        return []
+    bars: list[BarData] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        try:
+            when: datetime = datetime.fromisoformat(str(row["day"]))
+            bars.append(
+                BarData(
+                    symbol="",
+                    exchange=Exchange.SSE,
+                    datetime=when,
+                    interval=Interval.DAILY,
+                    volume=float(row.get("volume") or 0.0),
+                    turnover=float(row.get("volume") or 0.0) * float(row["close"]),
+                    open_price=float(row["open"]),
+                    high_price=float(row["high"]),
+                    low_price=float(row["low"]),
+                    close_price=float(row["close"]),
+                    gateway_name="SINASTOCK",
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return bars
+
+
+def fetch_daily_bars_from_sina(symbol: str) -> list[BarData]:
+    """Fetch forward-adjusted daily bars for one symbol from the public kline.
+
+    Raises ``ValueError`` when the host cannot answer for this symbol, so a
+    typo surfaces loudly instead of producing an empty campaign.
+    """
+    params: dict[str, str] = {
+        "symbol": _sina_symbol(symbol),
+        "scale": SINA_SCALE,
+        "ma": "no",
+        "datalen": str(SINA_MAX_BARS),
+    }
+    _throttle()
+    session = requests.Session()
+    try:
+        session.trust_env = False
+        response = session.get(
+            SINA_KLINE_URL,
+            params=params,
+            headers=_headers(),
+            timeout=SINA_TIMEOUT_SECS,
+        )
+    finally:
+        session.close()
+    response.raise_for_status()
+    try:
+        payload: object = response.json()
+    except ValueError as exc:
+        raise ValueError(f"sina returned non-json for {symbol}") from exc
+    bars: list[BarData] = _parse_sina_rows(payload)
+    if not bars:
+        raise ValueError(f"no daily bars from sina for {symbol}")
+    return bars
+
+
 def _fetch_window(
     secid: str,
     interval: str,
@@ -409,6 +606,32 @@ def fetch_daily_bars(
         cached: list[BarData] | None = _read_cache(secid, interval, resolved)
         if cached is not None:
             return cached
+
+    # The second source is tried first, because it answers in one request
+    # where the first host needs a window walked backwards request by request,
+    # and an outage on one is not an outage on the other. When the second host
+    # is unreachable the first is still the path, so a campaign degrades rather
+    # than fails. ``years`` still decides what the caller grades on: a series
+    # longer than asked for is trimmed from the front, so both sources return
+    # the same window whatever their history length.
+    try:
+        sina_bars: list[BarData] = fetch_daily_bars_from_sina(symbol)
+        if sina_bars:
+            cutoff: datetime = datetime.now().replace(
+                year=datetime.now().year - years
+            )
+            window: list[BarData] = [
+                bar for bar in sina_bars if bar.datetime >= cutoff
+            ]
+            if window:
+                for bar in window:
+                    bar.symbol = symbol
+                    bar.exchange = resolved
+                if use_cache:
+                    _write_cache(secid, interval, resolved, window)
+                return window
+    except (OSError, ValueError) as exc:
+        logger.warning("[sina] %s: %s", symbol, exc)
 
     end: str = datetime.now().strftime("%Y%m%d")
     collected: list[BarData] = []
