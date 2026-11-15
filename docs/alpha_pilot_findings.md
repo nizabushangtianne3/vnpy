@@ -655,3 +655,117 @@ takes twenty-eight seconds. The numbers did not change when the bugs were
 fixed - the same cached fit reads the same IC 0.0456 and ICIR 0.457 - which
 is the check that the fixes changed how the work was found and not what the
 work found.
+
+## The size information set was already in the data
+
+The section above closes with the reason the gate has not been reached: the
+factor set is price and volume, the ranking of 3000 names is harder to keep
+stable than the ranking of 778, and the direction that has not been tried is
+a different information set. It then says that a size, valuation or
+fundamental series would be a genuinely different information set, and that
+the data source this repository fetches carries only OHLCV bars, so that is
+a data problem before it is a modelling one.
+
+That last sentence was wrong about the host. It was right about the
+request. The daily kline endpoint the repository already calls was being
+asked for seven fields:
+
+```
+fields2=f51,f52,f53,f54,f55,f56,f57
+```
+
+and it will answer with more. Field f61 is the turnover rate in percent and
+field f70 is the float share count, published per session, so one extra
+field on the same request carries a size series that the pipeline was
+missing. No new host, no new dependency and no new crawl: the size
+information set was in the response all along and the request had left it
+on the floor.
+
+### What f70 actually is
+
+Two readings agree, and neither of them is a guess.
+
+The first is arithmetic. Eastmoney reports volume in lots, so the float
+count implied by the turnover rate is ``volume * 100 / (turnover / 100)``,
+and that count divided by f70 is:
+
+| name | implied / f70 |
+| --- | --- |
+| Eastmoney | 1.0022 |
+| BYD | 0.9992 |
+| Moutai | 1.0050 |
+| ICBC | 0.9906 |
+
+It is one, so f70 is the float share count and not the total share count.
+The market caps it produces are the right order of magnitude for the
+market: 1.89 trillion yuan for Moutai and 1.02 trillion for ICBC.
+
+The second is that the series is point in time rather than backfilled. SMIC
+went from 1.04 billion shares on 2020-07-16 to 1.10 billion on 2021-01-18
+to 1.87 billion on 2021-07-16, and CATL went from 2.03 billion to 2.31
+billion and back inside 2021. Every move lands on a date the capital
+actually changed and the value is flat between those dates, so a factor
+built on it cannot see a share issue before it happened.
+
+The two readings together are what make this usable: f70 is float shares,
+it is known on the day, and multiplying it by the session's price gives the
+float market cap.
+
+### The price in the dataset cannot be used for this
+
+The lab normalises every price by the first close it sees, so a normalised
+close of 0.99 means something different for a 100-yuan stock and a 5-yuan
+one. A market cap built on it would be the cap of the wrong company.
+
+The market cap is therefore built from turnover over volume, which is the
+session's average traded price in yuan, so the cap comes out in yuan
+without needing an unadjusted close:
+
+```
+price_filled = forward_fill(turnover / volume) over the symbol
+float_cap    = price_filled * float_shares
+```
+
+The fill is over the symbol and not across it, so a suspended session
+carries the last price it traded at and does not leak another name's.
+
+### What the size factors are
+
+The model gets the size itself rather than the market being sliced around
+it. A size stratum and a size factor are different things: the stratum
+shrinks the cross-section, which is what lowered ICIR in every slice above,
+while the factor leaves the cross-section whole and gives the booster
+something the 158 price factors cannot carry.
+
+| factor | what it is |
+| --- | --- |
+| size_log_cap | log of the float market cap |
+| size_cap_pct | the name's size rank inside its own session |
+| size_relative | its log cap against the session's mean log cap |
+| size_turnover | turnover against its own cap |
+| size_cap_change_5/20/60 | the cap's move over each window |
+| size_share_change_5/20/60 | the share count's move, which separates dilution from a falling price |
+
+Every window is trailing, so a factor on session T only sees sessions up to
+T, and the size on session T is the share count the host published on
+session T.
+
+### How the host behaves
+
+The kline host drops the connection outright when it is hit in bursts, and
+the block outlasts a short pause. A single-threaded run at one and a half
+seconds per request got through 146 symbols before the host started
+refusing, and the refusals were not code-specific: they were the symbols
+that happened to fall inside the blocked window. Four workers sharing one
+request gap got through 15 of 20 while the block was still clearing.
+
+So the fetcher runs four workers against a shared gap, retries the symbols
+that did not land in further passes, and waits between passes. The cache is
+per symbol and a symbol that already landed is never fetched twice.
+
+### What has not been measured yet
+
+Nothing about whether the size factors move the gate is claimed here. The
+factors and the dataset builder exist and are tested, and the measurement
+that uses them is written, but the reading is not in yet. The gate still
+reads ICIR 0.457 until a run with the size factors says otherwise.

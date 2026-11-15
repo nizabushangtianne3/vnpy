@@ -28,8 +28,10 @@ the date without changing how they read bars.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -68,16 +70,22 @@ HEADERS: dict[str, str] = {
 }
 
 _last_request_at: float = 0.0
+_throttle_lock: threading.Lock = threading.Lock()
 
 
 def throttle() -> None:
-    """Keep a minimum gap between requests to the kline host."""
+    """Keep a minimum gap between requests to the kline host.
+
+    The gap is shared between the workers, so running them concurrently
+    makes the host see a steady stream rather than a burst.
+    """
     global _last_request_at
-    now: float = time.monotonic()
-    remaining: float = MIN_REQUEST_GAP_SECS - (now - _last_request_at)
-    if remaining > 0:
-        time.sleep(remaining)
-    _last_request_at = time.monotonic()
+    with _throttle_lock:
+        now: float = time.monotonic()
+        remaining: float = MIN_REQUEST_GAP_SECS - (now - _last_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
+        _last_request_at = time.monotonic()
 
 
 def secid_for(code: str) -> str:
@@ -262,6 +270,18 @@ def main() -> int:
         action="store_true",
         help="fetch again even when the cache file already exists",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="how many symbols to fetch at once; the request gap is shared",
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=6,
+        help="how many passes over the symbols that have not landed yet",
+    )
     args = parser.parse_args()
 
     codes: list[str] = []
@@ -280,28 +300,57 @@ def main() -> int:
 
     done: int = 0
     failed: int = 0
+    pending: list[str] = []
     for code in codes:
-        if args.limit and done >= args.limit:
-            break
         target: Path = cache_path(cache_dir, code)
         if target.exists() and not args.refresh:
             done += 1
             continue
+        pending.append(code)
+
+    if args.limit:
+        pending = pending[: args.limit]
+
+    if not pending:
+        print(f"nothing to fetch, {done} already cached")
+        return 0
+
+    def work(code: str) -> tuple[str, int]:
+        """Fetch one symbol and report how many rows it produced."""
         try:
             rows: list[tuple[str, float]] = fetch_float_shares(code, args.beg, args.end)
-        except RuntimeError as exc:
-            failed += 1
-            print(f"FAIL {code}: {exc}")
-            if failed > 20:
-                print("too many failures, stopping")
-                break
-            continue
-        write_rows(target, rows)
-        done += 1
-        if done % 50 == 0:
-            print(f"{done}/{len(codes)} fetched, {failed} failed")
+        except RuntimeError:
+            return code, -1
+        write_rows(cache_path(cache_dir, code), rows)
+        return code, len(rows)
+
+    workers: int = max(1, args.workers)
+    remaining: list[str] = pending
+    for round_index in range(max(1, args.rounds)):
+        if not remaining:
+            break
+        failed_now: list[str] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for code, count in pool.map(work, remaining):
+                if count < 0:
+                    failed_now.append(code)
+                else:
+                    done += 1
+        failed += len(failed_now)
+        total: int = len(pending) + done
+        print(
+            f"round {round_index + 1}/{args.rounds}: "
+            f"{done}/{total} ok, {len(failed_now)} failed this round"
+        )
+        remaining = failed_now
+        if remaining:
+            # The host's penalty is a timeout, so the next pass waits long
+            # enough for it to clear before trying again.
+            time.sleep(RETRY_BACKOFF_SECS * 4)
 
     print(f"done: {done} ok, {failed} failed")
+    if remaining:
+        print(f"still missing {len(remaining)}: {', '.join(remaining[:10])}")
     return 1 if failed else 0
 
 

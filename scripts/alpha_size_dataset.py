@@ -189,9 +189,17 @@ def size_feature_columns() -> list[str]:
 
 
 def main() -> int:
-    """Report what the size information set covers."""
+    """Build the size-aware dataset and report what it covers."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--float-shares", default=FLOAT_SHARES)
+    parser.add_argument("--dataset", default="market3000")
+    parser.add_argument("--name", default="market3000_size")
+    parser.add_argument("--lab", default="D:/Codex/work/vnpy-alpha-cache/alpha_lab")
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="save the size-aware dataset to the lab",
+    )
     parser.add_argument(
         "--out",
         default="D:/Codex/work/vnpy-alpha-cache/sweeps/size_dataset_probe.parquet",
@@ -200,13 +208,19 @@ def main() -> int:
 
     from vnpy.alpha import AlphaLab
 
-    lab = AlphaLab("D:/Codex/work/vnpy-alpha-cache/alpha_lab")
-    dataset = lab.load_dataset("market3000")
+    lab = AlphaLab(args.lab)
+    dataset = lab.load_dataset(args.dataset)
     if dataset is None:
         print("dataset missing")
         return 2
 
     sized: pl.DataFrame = attach_size(dataset.df, args.float_shares)
+
+    if args.build:
+        build_size_dataset(dataset, sized, lab, args.name)
+        print(f"saved dataset {args.name} to {args.lab}")
+        return 0
+
     target: Path = Path(args.out)
     target.parent.mkdir(parents=True, exist_ok=True)
     sized.write_parquet(target)
@@ -219,6 +233,58 @@ def main() -> int:
         finite: int = values.is_finite().sum()
         print(f"  {name}: finite={finite}/{values.len()}")
     return 0
+
+
+def build_size_dataset(
+    dataset,
+    sized: pl.DataFrame,
+    lab,
+    name: str,
+) -> None:
+    """Write a dataset that carries the size factors.
+
+    The size columns are appended to the dataset's own frame and the factors
+    are then recalculated, so the model reads them the same way it reads the
+    158 price factors: as columns of ``learn_df`` and ``infer_df``.
+
+    The price columns are left exactly as they were. The lab normalises them
+    by the first close it sees, and the size factors are built from turnover
+    and volume, which are absolute, so nothing about the normalisation has
+    to change.
+    """
+    import copy
+
+    columns: list[str] = size_feature_columns()
+
+    # The size columns are computed on the frame that already carries the
+    # absolute turnover and volume, so they are joined back on the key.
+    size_frame: pl.DataFrame = sized.select(
+        ["datetime", "vt_symbol"] + columns
+    )
+    frame: pl.DataFrame = dataset.df.join(
+        size_frame,
+        on=["datetime", "vt_symbol"],
+        how="left",
+    )
+
+    # A name the host had no share count for gets a null size, and the
+    # booster reads a null as a missing value. Filling with the session
+    # median keeps the column finite without pretending the value was known.
+    for name in columns:
+        frame = frame.with_columns(
+            pl.col(name).fill_null(pl.col(name).median().over("datetime"))
+        )
+
+    new_dataset = copy.deepcopy(dataset)
+    new_dataset.df = frame
+
+    # The factors are recalculated from the enlarged frame, so the label and
+    # the 158 price factors come out the same as they did before and the
+    # size columns join them as extra factors.
+    new_dataset.prepare_data(max_workers=1)
+
+    lab.save_dataset(name, new_dataset)
+    print(f"dataset {name}: rows={new_dataset.result_df.height} factors={len(columns)}")
 
 
 if __name__ == "__main__":
