@@ -179,10 +179,10 @@ def attach_size(
     return joined
 
 
-def size_feature_columns() -> list[str]:
+def size_feature_columns(windows: tuple[int, ...] = (5, 20, 60)) -> list[str]:
     """The names of the columns the model should read as size factors."""
     columns: list[str] = ["size_log_cap", "size_cap_pct", "size_relative", "size_turnover"]
-    for window in (5, 20, 60):
+    for window in windows:
         columns.append(f"size_cap_change_{window}")
         columns.append(f"size_share_change_{window}")
     return columns
@@ -252,39 +252,55 @@ def build_size_dataset(
     and volume, which are absolute, so nothing about the normalisation has
     to change.
     """
-    import copy
-
     columns: list[str] = size_feature_columns()
 
-    # The size columns are computed on the frame that already carries the
-    # absolute turnover and volume, so they are joined back on the key.
-    size_frame: pl.DataFrame = sized.select(
-        ["datetime", "vt_symbol"] + columns
-    )
-    frame: pl.DataFrame = dataset.df.join(
-        size_frame,
-        on=["datetime", "vt_symbol"],
-        how="left",
-    )
+    augmented: object = augment_dataset(dataset, sized, columns)
+    lab.save_dataset(name, augmented)
+    print(f"dataset {name}: rows={augmented.result_df.height} factors={len(columns)}")
 
-    # A name the host had no share count for gets a null size, and the
-    # booster reads a null as a missing value. Filling with the session
-    # median keeps the column finite without pretending the value was known.
-    for name in columns:
-        frame = frame.with_columns(
-            pl.col(name).fill_null(pl.col(name).median().over("datetime"))
-        )
+
+def augment_dataset(dataset, sized: pl.DataFrame, columns: list[str]):
+    """Return a copy of the dataset with the size columns on every frame.
+
+    The size columns are joined onto the frames the dataset already carries
+    rather than recalculated through ``prepare_data``. Two reasons make that
+    the right call:
+
+    * The 158 price factors do not depend on the size columns, so
+      recomputing them would produce the same numbers at the cost of seven
+      minutes on a market-sized frame. Joining keeps them byte for byte
+      identical, which is also what makes the comparison against the
+      baseline fair.
+    * A frame that was rebuilt could differ from the baseline in ways that
+      have nothing to do with the factors being tested.
+
+    A name the host had no share count for gets a missing value, and the
+    missing value is written as NaN rather than as a number. That is the
+    convention the 158 price factors already use, because ``prepare_data``
+    fills their nulls with NaN, and the booster reads a NaN as a missing
+    value rather than as a zero. Filling the gap with a median would put a
+    number where the honest answer is "this name had no size on that day",
+    and the size rank would then be a rank of invented values.
+    """
+    import copy
+
+    size_frame: pl.DataFrame = sized.select(["datetime", "vt_symbol"] + columns)
 
     new_dataset = copy.deepcopy(dataset)
-    new_dataset.df = frame
+    for frame_name in ("df", "result_df", "raw_df", "infer_df", "learn_df"):
+        frame: pl.DataFrame = getattr(new_dataset, frame_name)
+        if "datetime" not in frame.columns or "vt_symbol" not in frame.columns:
+            continue
+        joined: pl.DataFrame = frame.drop(
+            [c for c in columns if c in frame.columns]
+        ).join(size_frame, on=["datetime", "vt_symbol"], how="left")
+        for column in columns:
+            joined = joined.with_columns(
+                pl.col(column).fill_null(float("nan"))
+            )
+        setattr(new_dataset, frame_name, joined)
 
-    # The factors are recalculated from the enlarged frame, so the label and
-    # the 158 price factors come out the same as they did before and the
-    # size columns join them as extra factors.
-    new_dataset.prepare_data(max_workers=1)
-
-    lab.save_dataset(name, new_dataset)
-    print(f"dataset {name}: rows={new_dataset.result_df.height} factors={len(columns)}")
+    return new_dataset
 
 
 if __name__ == "__main__":

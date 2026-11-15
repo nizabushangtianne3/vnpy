@@ -27,9 +27,7 @@ def bars_frame() -> pl.DataFrame:
         {"datetime": "2024-01-03", "vt_symbol": "000002.SZSE", "turnover": 500.0, "volume": 50.0},
         {"datetime": "2024-01-04", "vt_symbol": "000002.SZSE", "turnover": 500.0, "volume": 50.0},
     ]
-    return pl.DataFrame(rows).with_columns(
-        pl.col("datetime").str.to_datetime()
-    )
+    return pl.DataFrame(rows).with_columns(pl.col("datetime").str.to_datetime())
 
 
 def write_shares(tmp_path: Path) -> str:
@@ -147,3 +145,75 @@ class TestFeatureColumns:
         assert "size_cap_pct" in columns
         assert "size_share_change_60" in columns
         assert len(columns) == 10
+
+
+class TestAugmentDataset:
+    """Joining the size columns onto the frames the dataset carries."""
+
+    def _fake_dataset(self, frame: pl.DataFrame):
+        class FakeDataset:
+            pass
+
+        dataset = FakeDataset()
+        dataset.df = frame
+        dataset.result_df = frame
+        dataset.raw_df = frame
+        dataset.infer_df = frame
+        dataset.learn_df = frame
+        return dataset
+
+    def _sized(self, frame: pl.DataFrame, tmp_path, shares: float = 1.0) -> pl.DataFrame:
+        module = load_module()
+        out = frame.with_columns(
+            pl.col("vt_symbol")
+            .map_elements(lambda s: s.split(".")[0], return_dtype=pl.Utf8)
+            .alias("code")
+        )
+        out = out.with_columns(pl.lit(shares).alias("float_shares"))
+        return module.attach_size(out, write_shares(tmp_path), windows=(2,))
+
+    def test_the_price_factors_do_not_move(self, tmp_path):
+        module = load_module()
+        base = bars_frame().with_columns(pl.lit(0.5).alias("factor_one"))
+        dataset = self._fake_dataset(base)
+
+        sized = self._sized(base, tmp_path)
+        columns = module.size_feature_columns(windows=(2,))
+        out = module.augment_dataset(dataset, sized, columns)
+
+        assert out.result_df.height == dataset.result_df.height
+        assert out.result_df.select("factor_one").equals(
+            dataset.result_df.select("factor_one")
+        )
+
+    def test_the_size_columns_land_on_every_frame(self, tmp_path):
+        module = load_module()
+        base = bars_frame()
+        dataset = self._fake_dataset(base)
+
+        sized = self._sized(base, tmp_path)
+        columns = module.size_feature_columns(windows=(2,))
+        out = module.augment_dataset(dataset, sized, columns)
+
+        for frame_name in ("df", "result_df", "raw_df", "infer_df", "learn_df"):
+            frame = getattr(out, frame_name)
+            for column in columns:
+                assert column in frame.columns, f"{column} missing from {frame_name}"
+
+    def test_a_missing_size_becomes_nan_not_a_number(self, tmp_path):
+        module = load_module()
+        base = bars_frame()
+        dataset = self._fake_dataset(base)
+
+        # Only one of the two names has a share count.
+        one_name = base.filter(pl.col("vt_symbol") == "000001.SZSE")
+        sized = self._sized(one_name, tmp_path)
+        columns = module.size_feature_columns(windows=(2,))
+        out = module.augment_dataset(dataset, sized, columns)
+        # The booster reads a NaN as a missing value and a null as a row it
+        # cannot use, so the gap has to be NaN the way the price factors are.
+        nan_count = sum(
+            out.result_df.select(pl.col(c).is_nan().sum()).item() for c in columns
+        )
+        assert nan_count > 0
+        assert out.result_df.select(columns).null_count().row(0) == (0,) * len(columns)
