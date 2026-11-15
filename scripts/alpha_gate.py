@@ -48,7 +48,9 @@ SHARPE_MIN: float = 1.0
 COMMISSION_FRACTION_MAX: float = 0.02
 
 
-def predict_ensemble(dataset, seeds: list[int]) -> pl.DataFrame:
+def predict_ensemble(
+    dataset, seeds: list[int], model_kwargs: dict | None = None
+) -> pl.DataFrame:
     """Average one prediction per seed into a single signal frame.
 
     A single booster carries a variance that has nothing to do with the market:
@@ -59,9 +61,10 @@ def predict_ensemble(dataset, seeds: list[int]) -> pl.DataFrame:
     validate windows, so this is noise reduction rather than a new degree of
     freedom.
     """
+    model_kwargs = model_kwargs or {}
     total: pl.DataFrame | None = None
     for seed in seeds:
-        model = LgbModel(seed=seed)
+        model = LgbModel(seed=seed, **model_kwargs)
         model.fit(dataset)
         predicted = model.predict(dataset, Segment.TEST)
         frame = dataset.fetch_infer(Segment.TEST).sort(["datetime", "vt_symbol"])
@@ -89,6 +92,11 @@ def relabel(dataset, hold_days: int) -> None:
     ``learn_df``: changing one and not the others would leave the model scoring
     against a horizon it was not fitted on.
     """
+    # The denominator stays at the entry bar so the label measures the return
+    # a book that enters at the next session and holds for ``hold_days``
+    # sessions actually keeps. Pinning the denominator to the horizon instead
+    # would widen the measurement window by one bar and change what is being
+    # predicted rather than how long the book holds it.
     expression = f"ts_delay(close, -{hold_days}) / ts_delay(close, -1) - 1"
     # calculate_by_expression is the entry point prepare_data itself uses for
     # the 158 factors, so the horizon is evaluated by the code that already has
@@ -112,7 +120,13 @@ def relabel(dataset, hold_days: int) -> None:
     )
 
 
-def predict_rolling(dataset, seeds: list[int], train_window: int, step: int) -> pl.DataFrame:
+def predict_rolling(
+    dataset,
+    seeds: list[int],
+    train_window: int,
+    step: int,
+    model_kwargs: dict | None = None,
+) -> pl.DataFrame:
     """Refit on a moving window, and concatenate the out-of-sample predictions.
 
     A booster fitted once and scored over two years decays. The fitted IC falls
@@ -139,7 +153,7 @@ def predict_rolling(dataset, seeds: list[int], train_window: int, step: int) -> 
         dataset.data_periods[Segment.TRAIN] = (train_from, train_to)
         dataset.data_periods[Segment.VALID] = (train_from, train_to)
         dataset.data_periods[Segment.TEST] = (dates[index], block_end)
-        predicted = predict_ensemble(dataset, seeds).filter(
+        predicted = predict_ensemble(dataset, seeds, model_kwargs).filter(
             pl.col("datetime") >= pl.lit(dates[index])
         )
         scored = predicted if scored is None else scored.vstack(predicted)
@@ -180,12 +194,17 @@ def summarise_ic(infer: pl.DataFrame, dataset) -> dict:
 
 
 def rolling_rank_ic(
-    dataset, seeds: list[int], train_window: int, step: int, hold_days: int | None = None
+    dataset,
+    seeds: list[int],
+    train_window: int,
+    step: int,
+    hold_days: int | None = None,
+    model_kwargs: dict | None = None,
 ) -> dict:
     """Score a rolling-refit signal the same way a single fit is scored."""
     if hold_days is not None:
         relabel(dataset, hold_days)
-    scored = predict_rolling(dataset, seeds, train_window, step)
+    scored = predict_rolling(dataset, seeds, train_window, step, model_kwargs)
     if scored is None or scored.is_empty():
         return {
             "sessions": 0,

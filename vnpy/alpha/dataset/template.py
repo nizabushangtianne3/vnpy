@@ -137,6 +137,14 @@ class AlphaDataset:
 
         self.result_df = self.df.with_columns(results)
 
+        # Each factor series is copied into the frame here, and the list keeps
+        # holding its own reference to all of them afterwards. On a
+        # market-sized frame that dead list is as large as the frame itself, and
+        # every later stage pays for it: the fill, the filter, the concat and
+        # the sort. Dropping the references as soon as the columns are attached
+        # removes that copy without changing a single value.
+        results.clear()
+
         # Merge result data factor features
         logger.info("开始合并结果数据因子特征")
 
@@ -152,32 +160,68 @@ class AlphaDataset:
             cols: list = [col for col in self.result_df.columns if col != "label"] + ["label"]
             self.result_df = self.result_df.select(cols).sort(["datetime", "vt_symbol"])
 
-        # Generate raw data
-        raw_df: pl.DataFrame = self.result_df.fill_null(float("nan"))
+        # Only the factors are read by the booster, and it reads them as 32-bit
+        # floats whatever the frame says. Holding them at 64 bits doubles every
+        # copy a market-sized build takes of this frame -- the result frame
+        # itself, the filled copy, each filtered slice, their concatenation and
+        # the sort that follows it -- and that product, not the arithmetic, is
+        # what a full-market run runs out of memory on. The price columns keep
+        # their 64 bits because the label is recomputed from them, and a
+        # target rounded before the model sees it is a target that moved.
+        factor_names: list = [
+            name for name in self.result_df.columns[self.df.width :] if name != "label"
+        ]
+        if factor_names:
+            self.result_df = self.result_df.with_columns(
+                [pl.col(name).cast(pl.Float32) for name in factor_names]
+            )
+
+        # The filter only reads `vt_symbol` and `datetime`, and `fill_null` is
+        # applied to the surviving rows below. Filling first would push every
+        # null factor of every symbol to NaN across the whole market frame
+        # before a single row is dropped, which is a second full-size copy that
+        # the component filter then throws most of away.
+        raw_df: pl.DataFrame = self.result_df
 
         if filters:
             logger.info("开始筛选成分股数据")
-
-            dfs: list[pl.DataFrame] = []
-
             vt_symbol: str
             ranges: list[tuple[datetime, datetime]]
-            for vt_symbol, ranges in tqdm(filters.items(), total=len(filters)):
-                start: datetime
-                end: datetime
+            # A symbol's spans are contiguous runs, so grouping by the run itself
+            # turns thousands of per-symbol scans into one scan per run: the
+            # frame is visited once per interval instead of once per symbol,
+            # and every row that survives is identical to the old per-symbol
+            # union.
+            span_symbols: dict[tuple[datetime, datetime], list[str]] = {}
+            for vt_symbol, ranges in filters.items():
                 for start, end in ranges:
-                    temp_df: pl.DataFrame = raw_df.filter(
-                        (pl.col("vt_symbol") == vt_symbol)
-                        & (pl.col("datetime") >= pl.lit(start))
-                        & (pl.col("datetime") <= pl.lit(end))
-                    )
-                    dfs.append(temp_df)
+                    span_symbols.setdefault((start, end), []).append(vt_symbol)
 
-            raw_df = pl.concat(dfs)
+            # Filtering with `filter` materialises one frame per span, and a
+            # market-sized build has thousands of them, so the surviving rows
+            # are held twice over before the concat even starts. Building the
+            # boolean keep-mask instead and gathering once in the end touches
+            # each row a single time and never holds two copies of the frame.
+            start: datetime
+            end: datetime
+            symbols: list[str]
+            keep: pl.Series | None = None
+            for (start, end), symbols in tqdm(span_symbols.items(), total=len(span_symbols)):
+                inside: pl.Series = raw_df.select(
+                    pl.col("vt_symbol").is_in(symbols)
+                    & (pl.col("datetime") >= pl.lit(start))
+                    & (pl.col("datetime") <= pl.lit(end))
+                ).to_series()
+                keep = inside if keep is None else (keep | inside)
+
+            raw_df = raw_df.gather(pl.arg_where(keep)).sort(["datetime", "vt_symbol"])
+            del keep
 
         # Only keep feature columns
         select_columns: list[str] = ["datetime", "vt_symbol"] + raw_df.columns[self.df.width:]
-        self.raw_df = raw_df.select(select_columns).sort(["datetime", "vt_symbol"])
+        # Fill after the filter, so the null-to-NaN pass runs over the rows that
+        # are kept rather than over the whole market frame it is cut from.
+        self.raw_df = raw_df.select(select_columns).fill_null(float("nan"))
 
         self.infer_df = self.raw_df
         self.learn_df = self.raw_df

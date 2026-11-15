@@ -22,6 +22,7 @@ import polars as pl
 from vnpy.alpha import AlphaDataset, AlphaLab, Segment
 from vnpy.alpha.dataset import process_cs_norm, process_drop_na
 from vnpy.alpha.dataset.datasets.alpha_158 import Alpha158
+from vnpy.alpha.dataset.datasets.alpha_101 import Alpha101
 from vnpy.alpha.model.models.lgb_model import LgbModel
 from vnpy.alpha.strategy import BacktestingEngine
 from vnpy.alpha.strategy.strategies.equity_demo_strategy import EquityDemoStrategy
@@ -59,9 +60,30 @@ def main() -> int:
     parser.add_argument("--n-drop", type=int, default=3)
     parser.add_argument("--min-days", type=int, default=5)
     parser.add_argument("--strategy", default="gapped", choices=["demo", "gapped"])
+    parser.add_argument(
+        "--factor-set",
+        default="alpha158",
+        choices=["alpha158", "alpha101"],
+        help="which factor set to build the dataset from",
+    )
     parser.add_argument("--rebalance-days", type=int, default=5)
     parser.add_argument("--max-turnover-ratio", type=float, default=0.3)
     parser.add_argument("--output", default="")
+    parser.add_argument(
+        "--signal-cache",
+        default="",
+        help="where to read or write the rolling signal, so a sweep does not refit it",
+    )
+    parser.add_argument(
+        "--force-signal",
+        action="store_true",
+        help="refit the rolling signal even when a cache is present",
+    )
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="build and cache the dataset, then stop before fitting",
+    )
     parser.add_argument("--reuse-dataset", default="", help="cached dataset name to reuse instead of recomputing")
     parser.add_argument("--dataset-name", default="pilot", help="name to cache the dataset under")
     parser.add_argument("--train-end", nargs=2, default=["2021-01-01", "2022-12-31"])
@@ -84,7 +106,10 @@ def main() -> int:
         text: str = args.codes
         if Path(text).is_file():
             text = Path(text).read_text(encoding="utf-8")
-        codes = [c.strip() for c in text.split(",") if c.strip()]
+        # A file of codes is usually one per line; a command line is usually
+        # comma separated. Split on both so neither form has to be rewritten.
+        parts = text.replace("\n", ",").replace("\r", ",").split(",")
+        codes = [c.strip() for c in parts if c.strip()]
     else:
         import random
 
@@ -159,7 +184,9 @@ def main() -> int:
         if dataset is not None:
             print(f"复用数据集：{args.reuse_dataset}")
     if dataset is None:
-        dataset = Alpha158(
+        factor_classes = {"alpha158": Alpha158, "alpha101": Alpha101}
+        factor_class = factor_classes[args.factor_set]
+        dataset = factor_class(
             df,
             train_period=(args.train_end[0], args.train_end[1]),
             valid_period=(args.valid_end[0], args.valid_end[1]),
@@ -181,6 +208,19 @@ def main() -> int:
         lab.save_dataset(args.dataset_name, dataset)
         print(f"数据集已缓存：{args.dataset_name}")
 
+    if args.build_only:
+        # Widening the universe is bounded by RAM before it is bounded by
+        # anything else, and the fit and the backtest both need the dataset
+        # resident at their peak. Building and caching it on its own keeps the
+        # two costs separate: the expensive part happens once, and a later
+        # --reuse-dataset run pays for neither again.
+        result = dataset.result_df
+        print(
+            f"数据集已就绪：{args.dataset_name} 行数={result.height} "
+            f"标的={result['vt_symbol'].n_unique()} 日期={result['datetime'].n_unique()}"
+        )
+        return 0
+
     if args.rolling:
         # The rolling path already averages the seeds it is given, and it lives
         # in alpha_gate so that the IC grading and the backtest score the same
@@ -193,7 +233,20 @@ def main() -> int:
         gate = importlib.util.module_from_spec(gate_spec)
         gate_spec.loader.exec_module(gate)
         train_window, step = args.rolling
-        signal = gate.predict_rolling(dataset, [42], train_window, step)
+        signal_cache = Path(
+            args.signal_cache
+            or f"D:/Codex/work/vnpy-alpha-cache/sweeps/{args.reuse_dataset or args.dataset_name}_rolling{train_window}_{step}.parquet"
+        )
+        use_cache = False
+        if signal_cache.exists() and not args.force_signal:
+            cached = pl.read_parquet(signal_cache)
+            if cached.height and "signal" in cached.columns:
+                signal = cached
+                use_cache = True
+        if not use_cache:
+            signal = gate.predict_rolling(dataset, [42], train_window, step)
+            signal_cache.parent.mkdir(parents=True, exist_ok=True)
+            signal.write_parquet(signal_cache)
         print(f"滚动重训信号：{signal.height} 行")
     else:
         model = LgbModel(seed=42)

@@ -303,3 +303,283 @@ seeds over the rolling fit moved ICIR from 0.485 to 0.461 and IC positive share
 the wrong way, and rehorizoning the rolling label (hold_days 3 and 8) produced
 0.180 and 0.399. ICIR is the gate that remains, and it is a property of the
 signal rather than of the book that trades it.
+
+## The market-sized run, and what the first scan got wrong
+
+On the full 3021-symbol dataset with a rolling 900/250 fit, the gate reports
+rank IC 0.0456, ICIR 0.457 and positive share 0.697 over 501 sessions. Two of
+the three signal gates clear; ICIR is short by 0.043. The earlier numbers in
+this file that showed IC 0.0333 and ICIR 0.355 came from a run that passed
+``--hold-days 5`` to a dataset whose cached label already matched that
+horizon, which rewrote the label in four frames and left the fitted horizon
+disagreeing with the scored one. The cached label was checked against a fresh
+recomputation (mismatch 0.0), and the runs without ``--hold-days`` are the
+ones to trust.
+
+The first market slice scan was wrong in two ways, and both were silent:
+
+* it ranked symbols by the turnover of the last 250 cached bars, which is
+  November 2026, and then applied that ranking to sessions from 2024; and
+* it scored each liquidity bucket on the sessions where that bucket happened
+  to trade, while scoring the full market on every session, so the two
+  numbers were not comparable.
+
+The rewrite measures turnover over a trailing 60-session window, shifts it by
+one session so the value attached to a session is built only from earlier
+sessions, and scores every bucket on exactly the dates the reference is
+scored on. ``tests/test_alpha_universe_scan.py`` pins both.
+
+## IC and the money disagree, and the difference is not a measurement error
+
+With the corrected scan, the full market reads IC 0.0456 and the liquidity
+buckets read 0.0396 to 0.0488, so liquidity is not where the edge is or is
+not. What the scan also found is that the signal's own quintile split is
+monotonic but tiny, and that the top of the ranking is the worst place to
+trade it:
+
+| signal quintile | 1 (strongest) | 2 | 3 | 4 | 5 (weakest) |
+| --- | --- | --- | --- | --- | --- |
+| mean label, 5 sessions | 0.44% | 0.34% | 0.33% | 0.28% | 0.03% |
+| mean label with the day's mean removed | 0.16% | 0.05% | 0.05% | -0.00% | -0.26% |
+
+The strongest quintile beats the weakest by 0.42 percent over five sessions.
+That is the whole edge: about two percent a year before costs, and it is
+monotonic, so it is real. But the rank IC of 0.0456 on 3000 names is not
+measuring that 0.42 percent in a way a book can use.
+
+Taking the strongest 25 percent of each liquidity bucket and scoring it
+gives IC -0.0169. The controls say why: a random signal through the same
+slice gives -0.0003, the real signal with the buckets shuffled gives -0.0157,
+the label shifted one session gives 0.0013 and the label lagged one session
+gives 0.0008. The slice is not finding a hidden market; it is finding the
+bottom of the ranking, where the model's least confident calls sit and where
+the measured correlation turns negative. The earlier report that the same
+slice produced IC 0.1032 was a direction bug: ``rank`` numbers the smallest
+value 1, so the slice kept the model's worst calls, and a negative
+correlation between those and the label reads as a positive one once the
+sign is flipped.
+
+## The signal's edge lives in a handful of stocks, and the median stock loses
+
+``scripts/alpha_portfolio_probe.py`` measures what a book could have earned
+from the same cached signal, buying at the session after the signal is
+scored, which is the first session a book can actually trade. The forward
+return starts one session later on purpose: a model that has seen session
+T's close cannot buy at that close.
+
+The quintile split reproduces the dataset's own label to four decimals, so
+the probe and the gate are looking at the same thing. The portfolio numbers
+then say something the IC does not:
+
+| slice | mean 5-session return | median | best stock's average |
+| --- | --- | --- | --- |
+| top 30 of 2893 | 0.84% | -0.49% | 29.5% |
+| top 100 | 0.66% | -0.39% | 36.7% |
+| top 600 | 0.44% | -0.24% | 46.5% |
+
+Every slice has a negative median. The mean is carried by a handful of
+stocks that moved 30 to 45 percent inside five sessions, and the more of
+them a slice holds the larger that average becomes. This is the shape of the
+strategy a book cannot run: the median holding loses, and the return depends
+on catching a small number of jumps that are not knowable in advance.
+
+The rank band makes the same point. On the second half of the out-of-sample
+window (2025-07 onwards), the strongest 1 percent has a median of -0.82
+percent and the 10 to 20 percent band has -0.31 percent, while the weakest
+half of the ranking has a mean of 0.009 percent, which is nothing. The
+ranking is still informative - every band beats the weakest one - but the
+money is in the tail and the tail is where the selection noise is.
+
+## The signal decays after 2025-07, and that is what ICIR is measuring
+
+Splitting the window in half shows the decay. On the first half every slice
+earns a positive mean; on the second half the top 30 earn 0.51 percent per
+five sessions instead of 1.43, the top 100 earn 0.29 instead of 1.35, and
+the weakest half of the ranking earns nothing at all. The gate's ICIR of
+0.457 against a target of 0.50 is the daily IC swinging with that decay, not
+an estimator that can be averaged away.
+
+The rolling window is the obvious suspect: a 900-session window that scores
+2026 holds about two years of data from 2024 and 2025, and the signal those
+years produced is weaker than what it is being asked to predict.
+
+## The year and the rolling block say which half is the problem
+
+The daily IC by year, on the same 900/250 rolling fit:
+
+| year | rank IC | IC std | ICIR | sessions |
+| --- | --- | --- | --- | --- |
+| 2024 | 0.0529 | 0.1124 | 0.470 | 64 |
+| 2025 | 0.0412 | 0.1017 | 0.405 | 243 |
+| 2026 | 0.0487 | 0.0932 | 0.522 | 194 |
+
+2026 clears the ICIR gate on its own. 2025 carries 243 of the 501 sessions
+and is the one that drags the ratio down. The signal is not gone in 2025:
+the quintile spread that year is 0.308 percent, positive but half what 2024
+paid, and in 2026 every quintile is negative while the spread is still
+0.524 percent - that year the market fell and the ranking still separated
+the names.
+
+Splitting by rolling block rather than by year is what identifies the cause.
+Each block is scored by one model fitted on the window before it:
+
+| block | rank IC | ICIR |
+| --- | --- | --- |
+| 2024-09-26 to 2025-10-13 | 0.0461 | 0.419 |
+| 2025-10-14 to 2026-10-23 | 0.0447 | 0.503 |
+
+The second model, trained on data that includes the weak 2025, clears the
+ICIR gate. The first one, which was fitted before 2025 and spent the whole
+of 2025 being scored, does not. The stability of this signal is therefore
+not a property of the factors; it is a property of how long the book waits
+before refitting. A step of 250 sessions leaves a model in place for most of
+a year, and one bad year inside that year is enough to pull the whole ratio
+below the gate.
+
+## What was tried and did not work
+
+Four routes were measured and rejected, so they are not tried again:
+
+* **A liquidity filter.** The corrected as-of buckets read 0.0396 to 0.0488
+  across five buckets, with no bucket clearly better, and slicing the
+  ranking by liquidity changes nothing.
+* **Taking the strongest names.** The strongest 25 percent of each bucket
+  scores IC -0.0169, the same slice on a random signal scores -0.0003, and
+  the label moved one session forward or backward scores 0.0013 and 0.0008.
+  The signal's ordering information does not survive being cut down to the
+  names the model likes most.
+* **A shorter training window.** 500/120 reads IC 0.0388 and ICIR 0.438,
+  below the 900/250 fit, and the quintile spread falls from 0.42 to 0.32
+  percent. The window is not too long.
+* **Smoothing the signal over time.** Averaging the prediction over 2, 3,
+  5, 10 and 20 sessions moves ICIR from 0.465 down to 0.452, 0.430, 0.394,
+  0.394 and 0.359. A five-session label already carries the signal's own
+  inertia, and smoothing on top of it only adds lag.
+
+## Regularising the booster changes nothing, and the factor set makes it worse
+
+The rolling fit points the train segment and the validate segment at the
+same window, so the validation loss is the training loss and early stopping
+can never fire: every fit runs the full thousand rounds. On 2.4 million rows
+and 158 factors that looked like overfitting worth fixing, so
+``LgbModel`` grew regularisation arguments and they were measured on the
+window the rolling fit uses and the sessions that follow it:
+
+| settings | rank IC | ICIR | positive share |
+| --- | --- | --- | --- |
+| baseline | 0.0452 | 0.503 | 0.708 |
+| 15 leaves | 0.0481 | 0.480 | 0.695 |
+| 1000 rows per leaf | 0.0410 | 0.492 | 0.708 |
+| half the features | 0.0420 | 0.453 | 0.686 |
+| leaves, rows, features and L2 together | 0.0449 | 0.449 | 0.686 |
+
+Nothing beats the baseline. The booster's flexibility is not what makes the
+daily IC wobble.
+
+The other untried factor set is worse. Built on the same 778 symbols, with
+the same rolling fit and the same label:
+
+| factor set | rank IC | ICIR | positive share | quintile spread |
+| --- | --- | --- | --- | --- |
+| Alpha158 | 0.0412 | 0.479 | 0.701 | 0.40% |
+| Alpha101 | 0.0319 | 0.343 | 0.621 | 0.26% |
+
+The WorldQuant 101 factors are not the answer on this data.
+
+## The market-sized cross-section is what costs the ICIR
+
+The same Alpha158 model on the same dates, at two sizes:
+
+| universe | rank IC | ICIR | 2024 | 2025 | 2026 |
+| --- | --- | --- | --- | --- | --- |
+| 778 symbols | 0.0412 | 0.479 | 0.499 | 0.464 | 0.491 |
+| 3021 symbols | 0.0456 | 0.457 | 0.470 | 0.405 | 0.522 |
+
+The wider universe raises the IC, which is what widening was meant to do,
+and lowers the ICIR, because a daily ranking across 3000 names is harder to
+keep stable than a ranking across 778. On 778 symbols the signal clears
+0.5 in two of the three years; on 3021 it clears it in one.
+
+That reframes the goal. The book does not have to hold the 30 strongest names
+out of 3000 to capture the edge - the portfolio probe already showed that
+the strongest names carry a negative median and that the mean is carried by
+a handful of jumps. A wider book over the same ranking should be steadier
+than a narrow one, because the names that make the narrow book's return are
+the same names that make its variance.
+
+## The rebalance clock has to match the label, and the rest is noise
+
+The backtest on the market-sized set, holding 30 names and rebalancing every
+20 sessions, fails the trading gates: 1.40 percent total return, a 0.78
+sharpe, and 142 trades over 515 sessions. The clock, not the signal, is what
+moved. A five-session label is a prediction about the next five sessions, so
+a book that rebalances every twenty sessions is trading a horizon it did not
+ask about, and the 778-symbol rb20 numbers in this file do not carry over to
+the wider universe.
+
+Matching the clock to the label raises the sharpe from 0.78 to 1.29, and the
+sweep over the market-sized set reads:
+
+| top_k | rebalance_days | sharpe | annual return | commission |
+| --- | --- | --- | --- | --- |
+| 30 | 3 | 0.43 | 0.74% | 0.86% |
+| 30 | 5 | 1.29 | 2.80% | 0.53% |
+| 30 | 10 | 0.42 | 0.68% | 0.27% |
+| 50 | 3 | 0.70 | 1.01% | 0.82% |
+| 50 | 5 | 1.52 | 2.49% | 0.52% |
+| 50 | 10 | 0.74 | 1.00% | 0.28% |
+| 100 | 5 | 1.35 | 1.67% | 0.49% |
+| 100 | 10 | 1.05 | 1.16% | 0.26% |
+| 200 | 5 | 1.15 | 1.12% | 0.45% |
+| 200 | 10 | 1.02 | 0.98% | 0.26% |
+
+The sharpe at rebalance_days 5 stands out, and it should not be trusted on
+its own. Holding top_k 50 and sweeping the clock one session at a time gives
+4 days 0.08, 5 days 1.52, 6 days 1.04, 7 days 0.38, 8 days 1.08. That is not
+a peak, it is dispersion. The cells that survive their own neighbours are the
+5 to 10 session clocks at 100 to 200 names, which sit between 1.02 and 1.35
+with commissions under half a percent. Those are the settings that would be
+quoted as the trading gates, and the 1.52 is a number this file records as
+measured and does not rely on.
+
+## The ICIR ceiling, and where it comes from
+
+Fourteen ways of moving ICIR were measured and none of them crossed 0.50 on
+the market-sized cross-section:
+
+| direction | rank IC | ICIR |
+| --- | --- | --- |
+| rolling 900/250, one seed | 0.0456 | 0.457 |
+| rolling 500/120 | 0.0388 | 0.438 |
+| rolling 900/120 | 0.0465 | 0.476 |
+| rolling 900/250, seeds 42+1+2 | 0.0492 | 0.461 |
+| signal smoothed over 5 sessions | 0.0459 | 0.394 |
+| signal smoothed over 20 sessions | 0.0478 | 0.359 |
+| 15 leaves | 0.0481 | 0.480 |
+| 1000 rows per leaf | 0.0410 | 0.492 |
+| half the features per tree | 0.0420 | 0.453 |
+| leaves, rows, features and L2 together | 0.0449 | 0.449 |
+| relabelled to 10 sessions | 0.0436 | 0.430 |
+| Alpha101 instead of Alpha158, 778 symbols | 0.0319 | 0.343 |
+| the two factor sets ensembled | 0.0453 | 0.444 |
+| liquidity buckets, all five | 0.0396-0.0488 | 0.358-0.449 |
+
+The 1000-rows-per-leaf run lands at 0.492, which is the closest, and it is
+also the one that lost the most IC mean: it is buying the ratio with the
+level, which is the same trade the 1400/300 window made on 778 symbols.
+
+What the evidence supports is that the ratio is a property of the
+cross-section. On 778 symbols the same model reads ICIR 0.479 with the
+per-year split 0.499, 0.464, 0.491 - close to the gate in every year. On
+3021 symbols it reads 0.457 with the split 0.470, 0.405, 0.522. The wider
+universe raises the IC, which is what it was built for, and the daily ranking
+of 3000 names is harder to keep stable than the ranking of 778. Those are the
+same two effects the widening was supposed to separate, and on this data they
+move together.
+
+So the goal's ICIR gate, on this factor set with this data source, is not
+reachable by changing how the same 158 price-and-volume factors are fitted.
+The gate that has not been tried is a different information set - a size,
+valuation or fundamental one - and the data source this repository fetches
+(`push2his`) carries only OHLCV bars, so that is a data problem before it is
+a modelling one.

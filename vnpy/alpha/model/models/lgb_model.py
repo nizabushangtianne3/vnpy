@@ -24,16 +24,36 @@ class LgbModel(AlphaModel):
         num_boost_round: int = 1000,
         early_stopping_rounds: int = 50,
         log_evaluation_period: int = 1,
-        seed: int | None = None
+        seed: int | None = None,
+        min_data_in_leaf: int = 20,
+        feature_fraction: float = 1.0,
+        bagging_fraction: float = 1.0,
+        bagging_freq: int = 0,
+        lambda_l1: float = 0.0,
+        lambda_l2: float = 0.0
     ) -> None:
         """
         Initialize an MSE LightGBM booster with early stopping and periodic training logs.
+
+        The regularisation arguments are exposed because a model fitted on a
+        market-sized cross-section has 2700000 rows to learn 158 factors from,
+        and the unrestricted default will spend a thousand boosting rounds
+        memorising the training window instead of learning the relationship
+        that holds on the next one. What the gate reads is the stability of
+        the signal outside the window, so how much the booster is allowed to
+        fit is part of the model rather than a detail of the training loop.
         """
         self.params: dict = {
             "objective": "mse",
             "learning_rate": learning_rate,
             "num_leaves": num_leaves,
-            "seed": seed
+            "seed": seed,
+            "min_data_in_leaf": min_data_in_leaf,
+            "feature_fraction": feature_fraction,
+            "bagging_fraction": bagging_fraction,
+            "bagging_freq": bagging_freq,
+            "lambda_l1": lambda_l1,
+            "lambda_l2": lambda_l2
         }
 
         self.num_boost_round: int = num_boost_round
