@@ -56,12 +56,14 @@ RETRY_BACKOFF_SECS: float = 3.0
 MIN_REQUEST_GAP_SECS: float = 1.5
 
 # The host is also reachable through the user's own acceleration entries,
-# which return the same payload. They are the fallback rather than the
-# default: the direct host answers most of the time and a burst against the
-# gateways is just as likely to be blocked.
+# which return the same payload. Which one works depends on the host's
+# current mood: measured against a host that was refusing every direct
+# request, the jsnzkpg4 gateway answered 8 of 8 while the direct host
+# answered 0 of 8 and the seep gateway answered 0 of 8. So the gateway
+# comes first and the direct host is the fallback.
 PROXY_PREFIXES: tuple[str, ...] = (
-    "https://seep.eu.org/",
     "https://jsnzkpg4.pages.dev/",
+    "https://seep.eu.org/",
 )
 
 HEADERS: dict[str, str] = {
