@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import http.client
 import json
 import threading
 import time
@@ -196,7 +197,16 @@ def fetch_float_shares(
             else:
                 payload = opener(url)  # type: ignore[operator]
             data = json.loads(payload.decode("utf-8", "replace"))
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        # IncompleteRead derives from HTTPException and not from URLError or
+        # OSError, and the host cut a 45 KB answer in half on the way out.
+        # Letting it escape kills the worker that hit it, which takes the
+        # whole fetch down with the thread pool.
+        except (
+            urllib.error.URLError,
+            OSError,
+            ValueError,
+            http.client.HTTPException,
+        ) as exc:
             last_error = exc
             if attempt < MAX_RETRIES - 1:
                 # The backoff grows with the attempt because the host's
@@ -330,7 +340,9 @@ def main() -> int:
         """Fetch one symbol and report how many rows it produced."""
         try:
             rows: list[tuple[str, float]] = fetch_float_shares(code, args.beg, args.end)
-        except RuntimeError:
+        except Exception:
+            # A worker that dies takes the pool and the run with it, so the
+            # one that fails is reported rather than allowed to escape.
             return code, -1
         write_rows(cache_path(cache_dir, code), rows)
         return code, len(rows)

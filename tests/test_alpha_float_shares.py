@@ -123,6 +123,35 @@ class TestFetch:
         else:
             raise AssertionError("expected a RuntimeError")
 
+    def test_a_cut_answer_is_a_failure_not_a_crash(self):
+        module = load_module()
+
+        def opener(url: str) -> bytes:
+            raise module.http.client.IncompleteRead(b"partial")
+
+        try:
+            module.fetch_float_shares("600000", "20240101", "20240131", opener=opener)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("expected a RuntimeError")
+
+    def test_a_cut_answer_on_the_last_attempt_still_raises(self):
+        module = load_module()
+        calls = {"n": 0}
+
+        def opener(url: str) -> bytes:
+            calls["n"] += 1
+            raise module.http.client.IncompleteRead(b"partial")
+
+        try:
+            module.fetch_float_shares("600000", "20240101", "20240131", opener=opener)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("expected a RuntimeError")
+        assert calls["n"] == module.MAX_RETRIES
+
 
 class TestCache:
     """The on-disk round trip."""
