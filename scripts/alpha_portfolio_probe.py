@@ -122,7 +122,6 @@ def main() -> int:
     )
     print(f"bar duplicate (code, datetime) pairs: {close_dup.height}")
 
-    dates = sorted(signal["datetime"].unique().to_list())
     for horizon in args.horizon:
         priced = forward_returns(close, horizon)
         scored = signal.join(
@@ -149,13 +148,11 @@ def main() -> int:
         # match the signal's own quintile spread, the two disagree about what
         # the signal is worth and nothing below can be trusted.
         quintiles = ranked.with_columns(
-            (
-                ((pl.col("signal_rank") - 1) / pl.col("n") * 5)
-                .floor()
-                .cast(pl.Int64)
-                .clip(0, 4)
-                .alias("quintile")
-            )
+            ((pl.col("signal_rank") - 1) / pl.col("n") * 5)
+            .floor()
+            .cast(pl.Int64)
+            .clip(0, 4)
+            .alias("quintile")
         )
         by_quintile = (
             quintiles.group_by(["datetime", "quintile"])

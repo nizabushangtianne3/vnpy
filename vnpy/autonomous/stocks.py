@@ -646,7 +646,6 @@ def fetch_daily_bars(
         fresh: list[BarData] = [bar for bar in bars if bar.datetime not in seen]
         if not fresh:
             break
-        bar: BarData
         for bar in fresh:
             bar.symbol = symbol
             bar.exchange = resolved

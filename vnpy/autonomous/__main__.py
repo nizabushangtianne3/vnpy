@@ -848,7 +848,6 @@ def command_portfolio(args: argparse.Namespace) -> int:
         sum(r["test_sharpe"] for r in fold_results) / len(fold_results)
     )
     print(f"\n样本外合计 pnl={aggregate_test:.2f}, avg_sharpe={aggregate_test_sharpe:.3f}")
-    verdict: int
     payload: dict[str, Any] = {
         "folds": fold_results,
         "aggregate_test_pnl": aggregate_test,

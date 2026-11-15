@@ -202,19 +202,19 @@ class AlphaDataset:
             # are held twice over before the concat even starts. Building the
             # boolean keep-mask instead and gathering once in the end touches
             # each row a single time and never holds two copies of the frame.
-            start: datetime
-            end: datetime
-            symbols: list[str]
             keep: pl.Series | None = None
-            for (start, end), symbols in tqdm(span_symbols.items(), total=len(span_symbols)):
+            for (span_start, span_end), symbols in tqdm(
+                span_symbols.items(), total=len(span_symbols)
+            ):
                 inside: pl.Series = raw_df.select(
                     pl.col("vt_symbol").is_in(symbols)
-                    & (pl.col("datetime") >= pl.lit(start))
-                    & (pl.col("datetime") <= pl.lit(end))
+                    & (pl.col("datetime") >= pl.lit(span_start))
+                    & (pl.col("datetime") <= pl.lit(span_end))
                 ).to_series()
                 keep = inside if keep is None else (keep | inside)
 
-            raw_df = raw_df.gather(pl.arg_where(keep)).sort(["datetime", "vt_symbol"])
+            if keep is not None:
+                raw_df = raw_df.gather(pl.arg_where(keep)).sort(["datetime", "vt_symbol"])
             del keep
 
         # Only keep feature columns

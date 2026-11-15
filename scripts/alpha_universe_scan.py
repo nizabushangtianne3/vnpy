@@ -288,9 +288,6 @@ def decompose_ic(joined: pl.DataFrame) -> None:
     centred = frame.join(per_day_mean, on="datetime", how="left").with_columns(
         (pl.col("label") - pl.col("day_mean")).alias("label_centred")
     )
-    centred_daily = centred.group_by("datetime").agg(
-        pl.col("label_centred").mean().alias("mean_label")
-    )
     centred_quintile = (
         centred.group_by(["datetime", "signal_quintile"])
         .agg(pl.col("label_centred").mean().alias("mean_label"))

@@ -256,9 +256,6 @@ def main() -> int:
 
     # The same split by year, because a stratum that only works in one year
     # is a regime, not a signal.
-    ic_frame = scan.daily_ic_frame(joined).with_columns(
-        pl.col("datetime").str.slice(0, 4).alias("year")
-    )
     print("IC by year and stratum:")
     for bucket in range(args.quantiles):
         part = joined.filter(pl.col("size_bucket") == bucket)
