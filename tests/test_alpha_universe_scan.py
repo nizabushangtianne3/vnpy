@@ -126,3 +126,67 @@ def test_daily_ic_ignores_sessions_with_one_name():
     )
     ic = scan.daily_ic(frame)
     assert len(ic) == 1
+
+
+def test_signal_cache_path_finds_the_file_the_fit_writes():
+    """The cache lookup must land on the key, not on the caller's filename.
+
+    The default signal path has no seed suffix in its name while the key
+    always carries one. A lookup that matched the caller's stem against the
+    key would never find the cache, and every scan would refit a model it
+    already had on disk.
+    """
+    path = scan.signal_cache_path(
+        "D:/cache/market3000_rolling900_250.parquet",
+        "market3000",
+        900,
+        250,
+        0,
+        [42],
+    )
+    assert path.name == "market3000_rolling900_250_s42.parquet"
+    assert path.parent.name == "cache"
+
+
+def test_signal_cache_path_separates_seeds_and_horizons():
+    """A signal fitted with one seed or horizon is not another one's."""
+    one_seed = scan.signal_cache_path(
+        "D:/cache/x.parquet", "market3000", 900, 250, 0, [42]
+    )
+    three_seeds = scan.signal_cache_path(
+        "D:/cache/x.parquet", "market3000", 900, 250, 0, [42, 1, 2]
+    )
+    ten_days = scan.signal_cache_path(
+        "D:/cache/x.parquet", "market3000", 900, 250, 10, [42]
+    )
+    assert one_seed != three_seeds
+    assert one_seed != ten_days
+    assert "s42-1-2" in three_seeds.name
+    assert "_h10" in ten_days.name
+
+
+def test_cached_signal_carries_its_label_in_the_file_metadata(tmp_path):
+    """The label must be readable from the cache, or every scan refits.
+
+    The label is written into the parquet's custom metadata. Reading it
+    through DataFrame.schema instead returns only the column types, the
+    comparison against the dataset's label then fails on an empty string,
+    and the scan refits a model it already had on disk.
+    """
+    path = tmp_path / "signal.parquet"
+    frame = pl.DataFrame(
+        {
+            "datetime": ["2024-01-03"],
+            "vt_symbol": ["000001.SZSE"],
+            "signal": [0.5],
+        }
+    )
+    label = "ts_delay(close, -5) / ts_delay(close, -1) - 1"
+    frame.write_parquet(path, metadata={"label_expression": label})
+
+    metadata = dict(pl.read_parquet_metadata(path))
+    assert str(metadata.get("label_expression", "")) == label
+
+    # The wrong reader finds nothing, which is why the code above has to use
+    # the metadata reader.
+    assert "label_expression" not in dict(pl.read_parquet(path).schema)

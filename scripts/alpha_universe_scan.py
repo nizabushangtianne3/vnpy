@@ -100,6 +100,29 @@ def load_bars() -> pl.DataFrame:
     return pl.DataFrame(rows).sort(["code", "datetime"])
 
 
+def signal_cache_path(
+    requested: str,
+    dataset: str,
+    train_window: int,
+    step: int,
+    hold_days: int = 0,
+    seeds: list[int] | None = None,
+) -> Path:
+    """The file a rolling fit for these settings is cached under.
+
+    The key always carries the seed list and the horizon, because a signal
+    fitted with one seed is not the signal fitted with another. The caller's
+    path is only a hint about where to look: the default has no seed suffix
+    in its name, so matching the caller's file name against the key would
+    never find the cache and every run would refit.
+    """
+    seed_list = seeds or [42]
+    horizon_tag = f"_h{hold_days}" if hold_days else ""
+    seed_tag = f"_s{'-'.join(str(s) for s in seed_list)}"
+    key = f"{dataset}_rolling{train_window}_{step}{horizon_tag}{seed_tag}"
+    return Path(requested).with_name(f"{key}.parquet")
+
+
 def liquidity_buckets(
     window: int, quantiles: int, cache_dir: str
 ) -> pl.DataFrame:
@@ -511,16 +534,21 @@ def main() -> int:
     # data_periods block by block, so afterwards VALID and TEST point at the
     # last rolling block rather than the split the dataset was built with.
     bounds = period_bounds(dataset)
-    cache_path = Path(args.signal_cache)
-    horizon_tag = f"_h{args.hold_days}" if args.hold_days else ""
-    seed_tag = f"_s{'-'.join(str(s) for s in args.seeds)}"
-    cache_key = f"{args.dataset}_rolling{train_window}_{step}{horizon_tag}{seed_tag}"
-    # The cache carries the rolling window in its name and the dataset's own
-    # label expression in its metadata, so a cache built for a different
-    # horizon cannot be mistaken for this one.
+    cache_path = signal_cache_path(
+        args.signal_cache,
+        args.dataset,
+        train_window,
+        step,
+        args.hold_days,
+        args.seeds,
+    )
+    cache_key = cache_path.stem
     use_cache = False
-    if not args.force_signal and cache_path.exists() and cache_path.stem == cache_key:
-        meta = pl.read_parquet(cache_path).schema
+    if not args.force_signal and cache_path.exists():
+        # The label lives in the file's custom metadata, not in its schema.
+        # DataFrame.schema only carries the column types, so reading it here
+        # returned no label at all and every scan refitted.
+        meta = pl.read_parquet_metadata(cache_path)
         stored = dict(meta) if hasattr(meta, "items") else {}
         stored_label = str(stored.get("label_expression", ""))
         current_label = str(getattr(dataset, "label_expression", ""))

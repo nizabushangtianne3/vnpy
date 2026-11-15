@@ -583,3 +583,75 @@ The gate that has not been tried is a different information set - a size,
 valuation or fundamental one - and the data source this repository fetches
 (`push2his`) carries only OHLCV bars, so that is a data problem before it is
 a modelling one.
+
+## The size stratum is the one thing the data can still say, and it says no
+
+The cheapest version of a different information set is a size stratum. The
+cached bars carry no market cap, no valuation and no fundamentals, but
+turnover is volume times price, and the trailing mean of it says how heavily
+a name trades. ``scripts/alpha_size_strata.py`` cuts the market into three
+strata on the as-of rank of that trailing turnover, so a name's stratum on
+session T is built only from sessions before T, and scores every stratum on
+the same sessions the full market is scored on.
+
+The result on the 3021-name cross-section, 501 out-of-sample sessions:
+
+| stratum | rank IC | ICIR | positive share | ICIR of a random signal |
+| --- | --- | --- | --- | --- |
+| whole market | 0.0456 | 0.457 | 0.697 | - |
+| largest by turnover | 0.0462 | 0.391 | 0.653 | 0.017 |
+| middle by turnover | 0.0494 | 0.468 | 0.704 | -0.006 |
+| smallest by turnover | 0.0400 | 0.371 | 0.654 | -0.026 |
+
+The random-signal control is what makes this readable: it sits within 0.03
+of zero in every stratum, so the signal inside a stratum is real, and the
+stratum's ICIR is not being propped up by the slice.
+
+The middle stratum is the best of the three and it still misses the gate at
+0.468, and the split is not stable either:
+
+| stratum | 2024 | 2025 | 2026 |
+| --- | --- | --- | --- |
+| largest | 0.255 | 0.522 | 0.310 |
+| middle | 0.422 | 0.388 | 0.609 |
+| smallest | 0.576 | 0.232 | 0.508 |
+
+Every stratum falls below 0.5 in at least one year, and the smallest one
+swings from 0.576 to 0.232. There is no year in which all three clear the
+gate, and no stratum that clears it in two years out of three.
+
+The direction of the movement is the tell. Every stratum reads a *lower*
+ICIR than the whole market even though the middle one reads a higher IC.
+That is not the signal degrading inside a slice; it is the slice shrinking the
+cross-section, which shrinks the dispersion of the daily IC series and so
+changes what a mean-over-standard-deviation ratio means. A narrower book over
+the same ranking is not automatically a steadier signal, and the numbers say
+it is not one here.
+
+So the fifteenth direction is measured and rejected as well, and the
+conclusion it reaches is the same one the other fourteen reached: on this
+data source the ICIR gate is not reachable by slicing the market. A real
+size, valuation or fundamental series would be a genuinely different
+information set, and this repository does not have one.
+
+## The scans were refitting a model they already had
+
+Two bugs sat in the cache lookup that every scan shares, and together they
+made each scan cost about seven minutes of LightGBM fitting it never needed.
+
+The first was in the filename. The cache key always carries the seed list,
+because a signal fitted with one seed is not the signal fitted with another,
+but the lookup compared the caller's filename against that key. The default
+filename has no seed suffix in it, so the comparison could never succeed.
+
+The second was in the metadata. The label is written into the parquet's
+custom metadata, and the code read it through ``DataFrame.schema``, which
+carries the column types and nothing else. The comparison was therefore
+between the dataset's label and an empty string, which failed, and the scan
+refitted.
+
+Both are now covered by tests, and a scan that used to take seven minutes
+takes twenty-eight seconds. The numbers did not change when the bugs were
+fixed - the same cached fit reads the same IC 0.0456 and ICIR 0.457 - which
+is the check that the fixes changed how the work was found and not what the
+work found.
