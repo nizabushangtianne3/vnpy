@@ -763,9 +763,38 @@ So the fetcher runs four workers against a shared gap, retries the symbols
 that did not land in further passes, and waits between passes. The cache is
 per symbol and a symbol that already landed is never fetched twice.
 
-### What has not been measured yet
+### What the first read says
 
-Nothing about whether the size factors move the gate is claimed here. The
-factors and the dataset builder exist and are tested, and the measurement
-that uses them is written, but the reading is not in yet. The gate still
-reads ICIR 0.457 until a run with the size factors says otherwise.
+The pilot ran while the fetch was still going, so it answers the narrower
+question on the 355 names that had landed rather than the gate on all of
+them. The same rolling 900/250 fit, the same seed, the same sessions, and the
+only difference is whether the booster can see the size:
+
+| dataset | names | rank IC | ICIR | positive share |
+| --- | --- | --- | --- | --- |
+| price factors only | 355 | 0.0292 | 0.308 | 0.613 |
+| price and size factors | 355 | 0.0333 | 0.355 | 0.633 |
+| random signal, same names | 355 | -0.0015 | -0.030 | 0.464 |
+
+Both numbers move up, and the control says the signal inside them is real.
+That is the first time in this file that an addition to the factor set moves
+IC on out-of-sample sessions: the fifteen directions before it all moved how
+the same 158 price factors are fitted, and none of them crossed 0.50.
+
+The reading is not a gate result and is not being presented as one. A subset
+has a narrower cross-section, and a narrower cross-section reads a different
+ICIR for reasons that have nothing to do with the factors: the size-stratum
+section above is where that effect was measured directly. The price-only
+number here, 0.308 on 355 names, is not the 0.457 the gate reads on 3021 -
+which is the cross-section doing what the stratum section said it would do,
+and not a regression in the signal.
+
+So the honest statement is that the size information set carries
+information the price factors do not, measured on the names covered so far,
+and whether it moves the gate on the whole market is what the run on the
+full cross-section will say.
+
+What has not been measured is the gate on the whole market. The baseline that
+the gate is scored against reads 0.457 on 3021 names, and this run is on 355.
+The size dataset built on the full fetch is what the gate will be measured
+against, and until that run exists the gate still reads 0.457.
