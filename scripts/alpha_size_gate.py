@@ -56,6 +56,26 @@ def load_gate_script():
     return module
 
 
+def load_size_module():
+    """Import alpha_size_dataset without running its CLI."""
+    spec = importlib.util.spec_from_file_location(
+        "alpha_size_dataset", str(REPO / "scripts" / "alpha_size_dataset.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def build_size_dataset(dataset, size_mod, lab, name: str):
+    """Build the size-aware dataset from the pickled baseline and save it."""
+    sized: pl.DataFrame = size_mod.attach_size(dataset.df)
+    columns: list[str] = size_mod.size_feature_columns()
+    augmented = size_mod.augment_dataset(dataset, sized, columns)
+    lab.save_dataset(name, augmented)
+    print(f"built dataset {name}: rows={augmented.result_df.height} factors={len(columns)}")
+    return augmented
+
+
 def score(
     scan,
     joined: pl.DataFrame,
@@ -146,6 +166,11 @@ def main() -> int:
     )
     parser.add_argument("--force-signal", action="store_true")
     parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build the size dataset from the baseline before measuring",
+    )
+    parser.add_argument(
         "--split", choices=["valid", "test", "all"], default="test",
     )
     args = parser.parse_args()
@@ -162,8 +187,16 @@ def main() -> int:
         print(f"baseline dataset {args.baseline_dataset} missing")
         return 2
     if sized is None:
-        print(f"size dataset {args.size_dataset} missing; build it first")
-        return 2
+        if not args.build:
+            print(f"size dataset {args.size_dataset} missing; pass --build")
+            return 2
+        size_mod = load_size_module()
+        print(f"building {args.size_dataset} from {args.baseline_dataset}")
+        build_size_dataset(baseline, size_mod, lab, args.size_dataset)
+        sized = lab.load_dataset(args.size_dataset)
+        if sized is None:
+            print("build failed")
+            return 2
 
     bounds: dict = scan.period_bounds(baseline)
     signal_dir: Path = Path(args.signal_dir)
