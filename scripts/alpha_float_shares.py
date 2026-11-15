@@ -50,10 +50,18 @@ MAX_RETRIES: int = 4
 RETRY_BACKOFF_SECS: float = 3.0
 
 # The host drops the connection outright when hit in bursts, and the block
-# outlasts a short pause. A run at half a second per request stalled after
-# twelve symbols and then sat in retry backoff, so the gap is wider and the
-# retry waits longer.
-MIN_REQUEST_GAP_SECS: float = 1.5
+# outlasts a short pause. Measured on batches of sixty distinct symbols:
+# eight workers with a gap of five seconds each got 50 of 60 through at
+# 1.06 a second, twelve workers with a gap of three seconds each got 44 of
+# 60 at 1.63 a second, and twenty-four workers with a gap of a second and a
+# half got 27 of 60 at 0.94 a second. So the gap has to be per worker and
+# wide enough that the host never feels hit.
+MIN_REQUEST_GAP_SECS: float = 3.0
+
+# A pass over the symbols that did not land waits this long before the next
+# one, because the host's refusal clears on its own and waiting is cheaper
+# than retrying into it.
+PAUSE_BETWEEN_ROUNDS_SECS: float = 20.0
 
 # The host is also reachable through the user's own acceleration entries,
 # which return the same payload. Which one works depends on the host's
@@ -71,23 +79,24 @@ HEADERS: dict[str, str] = {
     "User-Agent": "Mozilla/5.0",
 }
 
-_last_request_at: float = 0.0
-_throttle_lock: threading.Lock = threading.Lock()
+_request_state = threading.local()
 
 
 def throttle() -> None:
     """Keep a minimum gap between requests to the kline host.
 
-    The gap is shared between the workers, so running them concurrently
-    makes the host see a steady stream rather than a burst.
+    The gap is per worker rather than shared. One shared gap caps the whole
+    fetch at one request every gap seconds no matter how many workers are
+    running, which measured at 0.067 symbols a second with eight workers
+    and a shared gap of five seconds. A per-worker gap lets each worker
+    keep its own pace and the fetch runs at the rate the host allows.
     """
-    global _last_request_at
-    with _throttle_lock:
-        now: float = time.monotonic()
-        remaining: float = MIN_REQUEST_GAP_SECS - (now - _last_request_at)
-        if remaining > 0:
-            time.sleep(remaining)
-        _last_request_at = time.monotonic()
+    last: float = getattr(_request_state, "last", 0.0)
+    now: float = time.monotonic()
+    remaining: float = MIN_REQUEST_GAP_SECS - (now - last)
+    if remaining > 0:
+        time.sleep(remaining)
+    _request_state.last = time.monotonic()
 
 
 def secid_for(code: str) -> str:
@@ -275,13 +284,13 @@ def main() -> int:
     parser.add_argument(
         "--workers",
         type=int,
-        default=4,
+        default=12,
         help="how many symbols to fetch at once; the request gap is shared",
     )
     parser.add_argument(
         "--rounds",
         type=int,
-        default=6,
+        default=15,
         help="how many passes over the symbols that have not landed yet",
     )
     args = parser.parse_args()
@@ -346,9 +355,10 @@ def main() -> int:
         )
         remaining = failed_now
         if remaining:
-            # The host's penalty is a timeout, so the next pass waits long
-            # enough for it to clear before trying again.
-            time.sleep(RETRY_BACKOFF_SECS * 4)
+            # The host's refusal is soft: a batch that got 20 of 30 through
+            # got 28 of 30 after a fifteen second pause. So the next pass
+            # waits long enough for the host to stop feeling hit.
+            time.sleep(PAUSE_BETWEEN_ROUNDS_SECS)
 
     print(f"done: {done} ok, {failed} failed")
     if remaining:

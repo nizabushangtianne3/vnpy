@@ -656,6 +656,38 @@ fixed - the same cached fit reads the same IC 0.0456 and ICIR 0.457 - which
 is the check that the fixes changed how the work was found and not what the
 work found.
 
+### How the host has to be driven
+
+The kline host's refusal is soft, and driving it well was the difference
+between a fetch that finished and one that did not. Measured on batches of
+sixty distinct symbols through the jsnzkpg4 gateway:
+
+| workers | gap per worker | answered | rate | 2340 pending at that rate |
+| --- | --- | --- | --- | --- |
+| 8 | 5.0s | 50/60 | 1.06/s | 37 min |
+| 12 | 3.0s | 44/60 | 1.63/s | 24 min |
+| 16 | 2.0s | 37/60 | 1.23/s | 32 min |
+| 24 | 1.5s | 27/60 | 0.94/s | 42 min |
+
+Twelve workers with a three second gap each is the winner, and the thing
+that makes it work is that the gap is **per worker**. One shared gap caps
+the whole fetch at one request per gap no matter how many workers are
+running: eight workers sharing a five second gap measured 0.067 symbols a
+second, because the eight of them were queueing on one clock and most of the
+time was spent waiting in it.
+
+The success rate also has a floor of its own. A single batch of distinct
+symbols at a gap of a second and a half got 20 of 30 through, and the same
+batch after a fifteen second pause got 28 of 30, so the failures are the
+host being hit and not the symbols being wrong. The fetcher therefore keeps
+the symbols that did not land and tries them again in later passes, with a
+twenty second pause between passes.
+
+Which gateway works is not a property of the machine. Measured against a
+host that was refusing every direct request, the jsnzkpg4 gateway answered
+8 of 8 while the direct host answered 0 of 8 and the seep gateway answered
+0 of 8. The fetch tries jsnzkpg4 first and falls back to the others.
+
 ## The size information set was already in the data
 
 The section above closes with the reason the gate has not been reached: the
