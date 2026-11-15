@@ -22,10 +22,22 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 
 DEFAULT_ROOT: str = ".vntrader"
+
+
+def say(message: str) -> None:
+    """Print a line, keeping it readable outside a UTF-8 terminal.
+
+    The script reports in Chinese, and a Windows runner whose stdout is
+    cp1252 turns that into a UnicodeEncodeError during print. Writing the
+    bytes directly keeps the output identical on any locale.
+    """
+    stream = sys.stdout.buffer if getattr(sys.stdout, "buffer", None) else sys.stdout
+    stream.write((message + "\n").encode("utf-8", "replace"))
 
 # Artifacts a run produces and nothing reads back.
 ARTIFACT_SUFFIXES: tuple[str, ...] = (".json", ".log", ".txt")
@@ -58,7 +70,7 @@ def main() -> int:
 
     root: Path = Path(args.root)
     if not root.is_dir():
-        print(f"没有找到目录：{root}")
+        say(f"没有找到目录：{root}")
         return 2
 
     keep: list[Path] = []
@@ -70,20 +82,20 @@ def main() -> int:
         (keep if classify(path) == "keep" else prune).append(path)
 
     for path in prune:
-        print(f"{'删除' if args.apply else '可删除'}：{path.name}")
+        say(f"{'删除' if args.apply else '可删除'}：{path.name}")
     for path in keep:
-        print(f"保留：{path.name}")
+        say(f"保留：{path.name}")
 
     freed: int = sum(path.stat().st_size for path in prune)
-    print(f"{len(prune)} 个文件，{freed / 1024:.1f} KiB")
+    say(f"{len(prune)} 个文件，{freed / 1024:.1f} KiB")
 
     if not args.apply:
-        print("加 --apply 执行删除")
+        say("加 --apply 执行删除")
         return 0
 
     for path in prune:
         path.unlink()
-    print(f"已删除 {len(prune)} 个文件")
+    say(f"已删除 {len(prune)} 个文件")
     return 0
 
 

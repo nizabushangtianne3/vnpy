@@ -30,9 +30,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ruff==0.14.1 mypy==1.19.1 uv pytest types-tqdm
           python -m pip install "ta-lib==0.6.4" --index-url https://pypi.vnpy.com
-          python -m pip install -e ".[dev]" "polars>=1.26.0" "scipy>=1.15.2" "pyarrow>=19.0.1" statsmodels matplotlib
+          # The alpha extra carries lightgbm, polars, scipy, pyarrow and the
+          # rest of the research dependencies, so the alpha tests are not
+          # skipped for a missing module.
+          python -m pip install -e ".[dev,alpha]" statsmodels matplotlib
           python -m pip install vnpy_sqlite
           python -m pip install vnpy_ctastrategy
+          python -m pip install vnpy_paperaccount
 
       - name: Lint
         run: ruff check .
