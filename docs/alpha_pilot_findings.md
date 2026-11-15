@@ -688,6 +688,27 @@ host that was refusing every direct request, the jsnzkpg4 gateway answered
 8 of 8 while the direct host answered 0 of 8 and the seep gateway answered
 0 of 8. The fetch tries jsnzkpg4 first and falls back to the others.
 
+### What the kline endpoint will not give
+
+The kline endpoint carries more than the seven columns the repository asked
+for, and the shape of that extra is worth recording so nobody spends the
+search again.
+
+`fields2` is truncated by the server rather than rejected. Requesting
+`f51` through `f70` returns twenty columns, of which `f58` is the day's
+amplitude, `f59` the change in percent, `f60` the change in yuan, `f61` the
+turnover rate, `f62` through `f69` are zero, and `f70` is the float share
+count. Requesting `f71` and above returns **no data at all**, and
+requesting a mix that starts at `f81` returns only `f51` through `f61`,
+which means the server stops at the last field it knows and drops the rest.
+
+So the daily kline carries price, volume, amount, amplitude, change,
+turnover and float shares, and nothing else. There is no earnings, no
+book value and no multiple on this endpoint: a valuation or a fundamental
+series would need a different host, and that remains true. The size
+information set is the part of the information that this endpoint was
+holding back, and it is now in hand.
+
 ## The size information set was already in the data
 
 The section above closes with the reason the gate has not been reached: the

@@ -176,6 +176,34 @@ def attach_size(
         (pl.col("turnover") / pl.col("float_cap").clip(lower_bound=1.0)).alias("size_turnover")
     )
 
+    # The share count's own move, separated from the price's. A change in
+    # the market cap is the sum of the two, and the model cannot tell them
+    # apart on its own: a company that issued stock and one whose price rose
+    # by the same percentage look identical in the cap column. The share
+    # count is the one that is information the price factors cannot see,
+    # because the price factors are all functions of the price.
+    for window in windows:
+        joined = joined.with_columns(
+            pl.col("float_shares")
+            .shift(window)
+            .over("vt_symbol")
+            .alias(f"size_shares_prev_{window}")
+        )
+        joined = joined.with_columns(
+            (
+                pl.col("float_shares")
+                / pl.col(f"size_shares_prev_{window}")
+                - 1.0
+            ).alias(f"size_issue_{window}")
+        )
+        joined = joined.with_columns(
+            (
+                pl.col("price_filled")
+                / pl.col("price_filled").shift(window).over("vt_symbol")
+                - 1.0
+            ).alias(f"size_price_move_{window}")
+        )
+
     return joined
 
 
@@ -185,6 +213,8 @@ def size_feature_columns(windows: tuple[int, ...] = (5, 20, 60)) -> list[str]:
     for window in windows:
         columns.append(f"size_cap_change_{window}")
         columns.append(f"size_share_change_{window}")
+        columns.append(f"size_issue_{window}")
+        columns.append(f"size_price_move_{window}")
     return columns
 
 

@@ -144,7 +144,46 @@ class TestFeatureColumns:
         assert "size_log_cap" in columns
         assert "size_cap_pct" in columns
         assert "size_share_change_60" in columns
-        assert len(columns) == 10
+        assert len(columns) == 16
+
+    def test_the_issue_and_the_price_move_are_separate(self):
+        module = load_module()
+        columns = module.size_feature_columns(windows=(5,))
+        assert "size_issue_5" in columns
+        assert "size_price_move_5" in columns
+
+
+class TestIssueAndPriceMove:
+    """The share count's move and the price's move, told apart."""
+
+    def test_an_issue_is_not_a_price_move(self, tmp_path):
+        module = load_module()
+        frame = bars_frame().with_columns(
+            pl.col("datetime").cast(pl.Utf8).str.slice(0, 10).alias("date_text")
+        )
+        out = module.attach_size(frame, write_shares(tmp_path), windows=(2,))
+        row = out.filter(
+            (pl.col("vt_symbol") == "000001.SZSE")
+            & (pl.col("date_text") == "2024-01-04")
+        ).row(0, named=True)
+        # The share count went from 1000 to 1100, so the issue column reads
+        # 0.10 and the price column reads the move in the traded price.
+        assert abs(row["size_issue_2"] - 0.1) < 1e-9
+        # turnover/volume is 12 on the last day and 10 two sessions back.
+        assert abs(row["size_price_move_2"] - (12.0 / 10.0 - 1.0)) < 1e-9
+
+    def test_the_cap_change_is_the_sum_of_the_two(self, tmp_path):
+        module = load_module()
+        frame = bars_frame().with_columns(
+            pl.col("datetime").cast(pl.Utf8).str.slice(0, 10).alias("date_text")
+        )
+        out = module.attach_size(frame, write_shares(tmp_path), windows=(2,))
+        row = out.filter(
+            (pl.col("vt_symbol") == "000001.SZSE")
+            & (pl.col("date_text") == "2024-01-04")
+        ).row(0, named=True)
+        expected: float = (1.0 + row["size_issue_2"]) * (1.0 + row["size_price_move_2"]) - 1.0
+        assert abs(row["size_cap_change_2"] - expected) < 1e-9
 
 
 class TestAugmentDataset:
