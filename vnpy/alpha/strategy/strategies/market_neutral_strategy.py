@@ -34,6 +34,8 @@ from vnpy.alpha import AlphaStrategy
 from vnpy.trader.constant import Direction
 from vnpy.trader.object import BarData, TradeData
 
+from vnpy.alpha.strategy.strategies.rank_band_strategy import buffered_band
+
 
 def hedge_basket(
     bars: dict[str, BarData], count: int, exclude: set[str]
@@ -60,9 +62,10 @@ class MarketNeutralStrategy(AlphaStrategy):
 
     band_low: float = 0.05       # rank share at the top of the long band
     band_high: float = 0.15      # rank share at the bottom of the long band
+    buffer_ratio: float = 0.10   # how far a held name may move and keep its place
     hedge_ratio: float = 1.0     # short value per unit of long value
     hedge_count: int = 30        # names in the short basket
-    rebalance_days: int = 5      # sessions between two rebalances
+    rebalance_days: int = 30     # sessions between two rebalances
     min_days: int = 5            # sessions a new long holding must wait
     max_turnover_ratio: float = 0.3
     cash_ratio: float = 0.95
@@ -105,9 +108,23 @@ class MarketNeutralStrategy(AlphaStrategy):
         # cross-section so the same band means the same thing on every
         # session.
         total: int = last_signal.height
-        start: int = int(total * self.band_low)
-        end: int = max(int(total * self.band_high), start + 1)
-        ranked: list[str] = list(last_signal["vt_symbol"][start:end])
+        universe: list[str] = list(last_signal["vt_symbol"])
+        # The long side uses the same buffered band as the long-only
+        # strategy, so the two books hold the same names and the hedge
+        # cancels the market rather than a different selection.
+        if self.buffer_ratio:
+            ranked = buffered_band(
+                universe,
+                set(pos_symbols),
+                total,
+                self.band_low,
+                self.band_high,
+                self.buffer_ratio,
+            )
+        else:
+            start: int = int(total * self.band_low)
+            end: int = max(int(total * self.band_high), start + 1)
+            ranked = universe[start:end]
         if not ranked:
             return
 

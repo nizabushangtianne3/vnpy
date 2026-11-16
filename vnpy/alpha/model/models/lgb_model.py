@@ -5,7 +5,6 @@ LightGBM model for alpha factor prediction.
 from typing import cast
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import lightgbm as lgb
 import matplotlib.pyplot as plt
@@ -75,12 +74,21 @@ class LgbModel(AlphaModel):
             df: pl.DataFrame = dataset.fetch_learn(segment)
             df = df.sort(["datetime", "vt_symbol"])
 
-            # Convert to numpy arrays
-            data: pd.DataFrame = df.select(df.columns[2: -1]).to_pandas()
+            # Convert to numpy arrays.
+            #
+            # The array is built once and handed to LightGBM directly.
+            # Going through pandas copied the frame again, and on a
+            # market-sized dataset with a 900-session training window that
+            # second copy was the difference between fitting and dying with
+            # "access violation writing 0x0000000000000000" inside
+            # LGBM_DatasetCreateFromMat. The validation segment is built and
+            # released one segment at a time for the same reason: holding
+            # both matrices at once doubles the peak for no gain.
+            data: np.ndarray = df.select(df.columns[2: -1]).to_numpy()
             label: np.ndarray = np.array(df["label"])
 
             # Add training data
-            ds.append(lgb.Dataset(data, label=label))
+            ds.append(lgb.Dataset(data, label=label, free_raw_data=True))
 
         return ds
 

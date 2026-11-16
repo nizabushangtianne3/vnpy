@@ -53,11 +53,14 @@ def build_engine(
     band_low: float,
     band_high: float,
     strategy: str,
+    buffer_ratio: float,
     hedge_ratio: float,
     hedge_count: int,
     rebalance_days: int,
     min_days: int,
     max_turnover_ratio: float,
+    open_rate: float,
+    close_rate: float,
 ) -> BacktestingEngine:
     """Set up one engine run with the band strategy."""
     engine = BacktestingEngine(lab)
@@ -73,20 +76,26 @@ def build_engine(
         strategy_setting = {
             "band_low": band_low,
             "band_high": band_high,
+            "buffer_ratio": buffer_ratio,
             "hedge_ratio": hedge_ratio,
             "hedge_count": hedge_count,
             "rebalance_days": rebalance_days,
             "min_days": min_days,
             "max_turnover_ratio": max_turnover_ratio,
+            "open_rate": open_rate,
+            "close_rate": close_rate,
         }
     else:
         strategy_class = RankBandStrategy
         strategy_setting = {
             "band_low": band_low,
             "band_high": band_high,
+            "buffer_ratio": buffer_ratio,
             "rebalance_days": rebalance_days,
             "min_days": min_days,
             "max_turnover_ratio": max_turnover_ratio,
+            "open_rate": open_rate,
+            "close_rate": close_rate,
         }
     engine.add_strategy(
         strategy_class,
@@ -157,8 +166,14 @@ def main() -> int:
     parser.add_argument("--start", default="2024-09-26")
     parser.add_argument("--end", default="2026-11-13")
     parser.add_argument("--capital", type=float, default=100_000_000)
-    parser.add_argument("--band-low", type=float, default=0.0)
-    parser.add_argument("--band-high", type=float, default=0.10)
+    parser.add_argument("--band-low", type=float, default=0.05)
+    parser.add_argument("--band-high", type=float, default=0.15)
+    parser.add_argument(
+        "--buffer-ratio",
+        type=float,
+        default=0.10,
+        help="share of the cross-section below the band that a held name may fall and stay",
+    )
     parser.add_argument(
         "--strategy",
         default="band",
@@ -177,9 +192,11 @@ def main() -> int:
         default=30,
         help="names in the short basket",
     )
-    parser.add_argument("--rebalance-days", type=int, default=5)
+    parser.add_argument("--rebalance-days", type=int, default=30)
     parser.add_argument("--min-days", type=int, default=5)
     parser.add_argument("--max-turnover-ratio", type=float, default=0.3)
+    parser.add_argument("--open-rate", type=float, default=0.0005)
+    parser.add_argument("--close-rate", type=float, default=0.0015)
     parser.add_argument(
         "--sweep",
         action="store_true",
@@ -193,13 +210,16 @@ def main() -> int:
 
     vt_symbols: list[str] = sorted(signal["vt_symbol"].unique().to_list())
     lab = AlphaLab(args.lab)
+    # The engine charges the commission from the lab's contract settings, so
+    # the cost sensitivity has to be written there and not only into the
+    # strategy's own budget arithmetic.
     for vt_symbol in vt_symbols:
         if not (Path(args.lab) / "daily" / f"{vt_symbol}.parquet").exists():
             continue
         lab.add_contract_setting(
             vt_symbol=vt_symbol,
-            long_rate=0.0005,
-            short_rate=0.0015,
+            long_rate=args.open_rate,
+            short_rate=args.close_rate,
             size=1.0,
             pricetick=0.01,
         )
@@ -230,11 +250,14 @@ def main() -> int:
             low,
             high,
             args.strategy,
+            args.buffer_ratio,
             args.hedge_ratio,
             args.hedge_count,
             args.rebalance_days,
             args.min_days,
             args.max_turnover_ratio,
+            args.open_rate,
+            args.close_rate,
         )
         summary = summarise(engine, args.capital)
         by_year = yearly(engine)

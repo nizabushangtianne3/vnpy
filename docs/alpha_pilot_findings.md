@@ -1073,3 +1073,66 @@ reliably fill, because the borrow is scarce and expensive. The
 measurement says the shape is right; the deployment has to use an index
 future or an ETF leg instead of these names, and that leg has to be
 priced against its own margin and financing.
+
+## The old commission column was read wrong, and the old book failed the fee gate
+
+The table above prints ``commission`` as the fraction returned by the
+engine, and that fraction is not a percent. The neutral book's 0.048 is
+**4.8 percent of capital**, not 0.048 percent. So the setting that was
+recorded as clearing the trading gates did not clear the fee gate at all:
+the goal allows at most 2 percent, and the 5-day book spent 4.8.
+
+The same correction applies to the turnover column. 47.9 is 47.9 times
+capital turned over over the whole window, and the cost of that churn is
+what the fee column is measuring.
+
+## A buffered band and a slower clock clear the fee gate
+
+Two changes were made to the book, and both were measured with the real
+engine rather than estimated:
+
+* A buffered band. A held name keeps its place while it is inside the
+  band or within ``buffer_ratio`` of either edge, so a name that merely
+  moved across an edge is neither bought nor sold. The book keeps the
+  band's own number of names, so the buffer does not turn into a larger,
+  more expensive book.
+* A longer rebalance clock. The label is five sessions, and a five-day
+  clock re-cut the book 48 times a year while the ranking's own churn did
+  most of the work.
+
+With a 5-to-15 percent band, a hedge of 1.0 and a buffer of 0.10:
+
+| rebalance | sharpe | total return | max drawdown | turnover | commission | 2024 | 2025 | 2026 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 5 days, no buffer | 1.42 | 17.84% | -3.96% | 47.93x | 4.806% | 2.62 | 1.40 | 0.99 |
+| 20 days, no buffer | 1.50 | 18.09% | -3.96% | 12.39x | 1.247% | 2.87 | 1.54 | 0.92 |
+| 20 days, buffer 0.10 | 1.63 | 25.70% | -4.64% | 13.23x | 1.337% | 2.97 | 1.12 | 1.45 |
+| 30 days, no buffer | 1.69 | 20.46% | -3.77% | 9.00x | 0.908% | 2.81 | 1.78 | 1.24 |
+| 30 days, buffer 0.05 | 1.84 | 26.15% | -3.77% | 9.32x | 0.942% | 2.85 | 1.87 | 1.43 |
+| 30 days, buffer 0.10 | 1.81 | 27.63% | -4.08% | 9.47x | 0.956% | 2.85 | 1.80 | 1.39 |
+| 30 days, buffer 0.15 | 1.82 | 30.13% | -4.32% | 9.65x | 0.975% | 2.82 | 1.69 | 1.49 |
+| 30 days, buffer 0.20 | 1.78 | 32.32% | -5.19% | 9.91x | 1.002% | 2.80 | 1.70 | 1.38 |
+
+The yearly figures are that year's sharpe, and every one of them is
+positive. The 30-day row is a plateau rather than a spike: buffers from
+0.05 to 0.20 all read between 1.78 and 1.84, and 20, 25 and 30-day
+clocks all clear 1.35 at every buffer that was tried.
+
+Cost sensitivity was checked with the fee actually written into the
+engine's contract settings, because the strategy's own cost fields only
+feed its budget arithmetic and not the commission the engine charges:
+
+| one-way cost | sharpe | commission | 2024 | 2025 | 2026 |
+| --- | --- | --- | --- | --- | --- |
+| 5 bp | 1.84 | 0.474% | 2.87 | 1.85 | 1.42 |
+| 10 bp | 1.81 | 0.947% | 2.85 | 1.80 | 1.39 |
+| 20 bp | 1.76 | 1.887% | 2.80 | 1.72 | 1.35 |
+
+The book's edge outruns the fee up to 20 basis points on each side, and
+the real A-share setting of 5 basis points to buy and 15 to sell lands on
+the same curve.
+
+What this still does not settle is the deployment leg. The short side is
+still a basket of individual A-shares in the measurement, and a live book
+has to hold that exposure through an index future or an ETF, priced with
+its own margin and financing.

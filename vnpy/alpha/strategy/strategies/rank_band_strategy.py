@@ -46,11 +46,67 @@ def band_slice(total: int, low: float, high: float) -> tuple[int, int]:
     return start, min(end, total)
 
 
+def buffered_band(
+    ranked: list[str],
+    held: set[str],
+    total: int,
+    low: float,
+    high: float,
+    buffer_ratio: float,
+) -> list[str]:
+    """The band, with held names kept while they stay near its edges.
+
+    The ranking is noisy relative to the edge: the band changed 73 percent
+    of its membership every five sessions even though the signal's daily
+    IC is stable, so most of that churn was the ranking reshuffling rather
+    than the edge moving. At 48 rebalances a year that is 35 times capital
+    of turnover, and every cost is charged on it.
+
+    A held name keeps its place while it is inside the band or within
+    ``buffer_ratio`` of either edge. A name that merely moved across an
+    edge is neither bought nor sold; one that has genuinely left the
+    buffered region is sold. The book keeps the band's own number of names,
+    so hysteresis does not turn the book into a larger, more expensive one.
+
+    The buffer is a share of the cross-section rather than a rank count, so
+    it means the same thing on every universe size.
+    """
+    start, end = band_slice(total, low, high)
+    if not buffer_ratio or not held:
+        return list(ranked[start:end])
+
+    target: int = end - start
+    lower: int = max(start - int(total * buffer_ratio), 0)
+    upper: int = min(end + int(total * buffer_ratio), total)
+
+    # Core holdings come first. Buffer holdings follow, nearest to the core
+    # on either side, so a name that moved a little is preferred to one that
+    # has already travelled far from the selection.
+    above = list(reversed(ranked[lower:start]))
+    below = ranked[end:upper]
+    keep: list[str] = [vt for vt in ranked[start:end] if vt in held]
+    for vt_symbol in above + below:
+        if len(keep) >= target:
+            break
+        if vt_symbol in held and vt_symbol not in keep:
+            keep.append(vt_symbol)
+
+    # Vacancies go to the best names available, with the core preferred.
+    for vt_symbol in ranked[start:end] + above + below:
+        if len(keep) >= target:
+            break
+        if vt_symbol not in keep:
+            keep.append(vt_symbol)
+
+    return sorted(keep[:target], key=ranked.index)
+
+
 class RankBandStrategy(AlphaStrategy):
     """Hold a share of the ranking's head, rebalanced on a fixed clock."""
 
     band_low: float = 0.0         # rank share at the top of the band
     band_high: float = 0.10       # rank share at the bottom of the band
+    buffer_ratio: float = 0.0     # how far a held name may fall and keep its place
     rebalance_days: int = 5       # sessions between two rebalances
     min_days: int = 5             # sessions a new holding must wait before selling
     max_turnover_ratio: float = 0.3
@@ -93,7 +149,22 @@ class RankBandStrategy(AlphaStrategy):
         # the same thing whether the universe is 300 names or 3,000.
         total: int = last_signal.height
         start, end = band_slice(total, self.band_low, self.band_high)
-        ranked: list[str] = list(last_signal["vt_symbol"][start:end])
+        universe: list[str] = list(last_signal["vt_symbol"])
+
+        # With a buffer the target is the band plus the held names that have
+        # fallen just past its lower edge, which is what keeps a book that is
+        # already right from being churned by the ranking's noise.
+        if self.buffer_ratio:
+            ranked = buffered_band(
+                universe,
+                set(pos_symbols),
+                total,
+                self.band_low,
+                self.band_high,
+                self.buffer_ratio,
+            )
+        else:
+            ranked = universe[start:end]
         if not ranked:
             return
 
