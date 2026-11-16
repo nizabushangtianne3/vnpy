@@ -59,7 +59,21 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=30)
     parser.add_argument("--n-drop", type=int, default=3)
     parser.add_argument("--min-days", type=int, default=5)
-    parser.add_argument("--strategy", default="gapped", choices=["demo", "gapped"])
+    parser.add_argument(
+        "--strategy", default="gapped", choices=["demo", "gapped", "band"]
+    )
+    parser.add_argument(
+        "--band-low",
+        type=float,
+        default=0.0,
+        help="rank share at the top of the band the strategy holds",
+    )
+    parser.add_argument(
+        "--band-high",
+        type=float,
+        default=0.10,
+        help="rank share at the bottom of the band the strategy holds",
+    )
     parser.add_argument(
         "--factor-set",
         default="alpha158",
@@ -275,7 +289,7 @@ def main() -> int:
     if args.strategy == "demo":
         strategy_class = EquityDemoStrategy
         strategy_setting = {"top_k": args.top_k, "n_drop": args.n_drop, "min_days": args.min_days}
-    else:
+    elif args.strategy == "gapped":
         from vnpy.alpha.strategy.strategies.gapped_rebalance_strategy import (
             GappedRebalanceStrategy,
         )
@@ -283,6 +297,19 @@ def main() -> int:
         strategy_class = GappedRebalanceStrategy
         strategy_setting = {
             "top_k": args.top_k,
+            "rebalance_days": args.rebalance_days,
+            "min_days": args.min_days,
+            "max_turnover_ratio": args.max_turnover_ratio,
+        }
+    else:
+        from vnpy.alpha.strategy.strategies.rank_band_strategy import (
+            RankBandStrategy,
+        )
+
+        strategy_class = RankBandStrategy
+        strategy_setting = {
+            "band_low": args.band_low,
+            "band_high": args.band_high,
             "rebalance_days": args.rebalance_days,
             "min_days": args.min_days,
             "max_turnover_ratio": args.max_turnover_ratio,

@@ -1002,3 +1002,74 @@ signal should be asked about which names beat the market rather than which
 names go up. That is either a demeaned label, which is what the ranking
 already sees, carried through to a market-neutral book, or an explicit
 hedge. Both are a portfolio-layer change and neither is a tuning change.
+
+## The beta was the selection's own leverage, and it has a measured size
+
+The "beta" in the table above is not the market's. A random 30-name book
+drawn from the same cross-section on the same sessions has a beta of 0.998
+against the cross-section's own mean, and the top-30 book has 1.579. The
+market's contribution is the first number; the extra 0.58 is what the
+extreme names of a 3,000-name ranking do relative to the average name, and
+it is the reason the book was punished in 2026.
+
+| year | top-30 | random 30 | cross-section | beta top | beta random |
+| --- | --- | --- | --- | --- | --- |
+| 2024 | +2.65% | +0.45% | +0.45% | 1.69 | 1.00 |
+| 2025 | +1.09% | +0.66% | +0.67% | 1.53 | 1.01 |
+| 2026 | +0.05% | -0.23% | -0.24% | 1.55 | 0.99 |
+
+The random book also lost money in 2026, so 2026 was a falling market for
+every name in it. What the top-30 did was lose less than the market while
+carrying 55 percent more of it.
+
+Where the leverage comes from is the width of the band the book cuts. The
+band is a share of the cross-section rather than a count of names, so the
+same setting means the same thing on every universe size:
+
+| band | held | beta | 2024 | 2025 | 2026 | relative 2024 | 2025 | 2026 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.00-0.01 | 30 | 1.57 | +2.70% | +1.09% | +0.02% | +2.24% | +0.41% | +0.26% |
+| 0.05-0.15 | 294 | 1.07 | +0.95% | +0.82% | -0.02% | +0.49% | +0.14% | +0.22% |
+| 0.10-0.30 | 589 | 0.93 | +0.64% | +0.75% | +0.01% | +0.19% | +0.08% | +0.25% |
+
+The relative columns are the book with the cross-section's own mean
+removed, and they are positive in every year of every band. The selection
+was paid every year. Only the exposure was the problem.
+
+## The neutral book clears the gates, and the margin is not a spike
+
+`MarketNeutralStrategy` holds the 5-to-15 percent band and shorts a
+basket against it. The basket is the most liquid names, chosen once and
+kept, with the long side's own names excluded so the hedge does not
+cancel the selection it is there to preserve. The engine's own numbers,
+with A-share commissions of 0.05 percent to buy and 0.15 percent to sell:
+
+| setting | sharpe | total return | max drawdown | commission | 2024 | 2025 | 2026 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| band only, 0.05-0.15 | 1.04 | 15.23% | -6.01% | 0.041% | +2.18 | +1.68 | -0.07 |
+| neutral, hedge 1.0 | 1.42 | 17.84% | -3.96% | 0.048% | +2.62 | +1.40 | +0.99 |
+| neutral, hedge 0.8 | 1.39 | 17.35% | -4.25% | 0.047% | +2.58 | +1.63 | +0.78 |
+
+The yearly figures are that year's sharpe, so all three years are
+positive for both neutral settings. The long-only band loses money in
+2026 and the neutral book does not.
+
+That the hedge is not a fit to one particular basket is the part that
+matters, and it was checked three ways. The hedge leg was replaced by an
+equal-weighted slice of the entire universe and the clock sharpe stayed
+at 1.11; it was replaced by random baskets of 10, 30 and 100 names and
+those read 0.99, 1.15 and 1.06. The effect belongs to the neutrality, not
+to a basket that was picked well.
+
+The grid around the setting is a plateau rather than a spike. Every band
+between 0.00-0.05 and 0.10-0.30 clears a clock sharpe of 1.0 at every
+hedge ratio from 0.6 to 1.0, and the best cells sit at a hedge of 0.6 to
+0.8 rather than at the setting that was run. The best region is
+0.10-0.20 at a hedge of 0.8, reading 1.57.
+
+What this does not settle is how a live book would hold the short leg.
+Shorting thirty individual A-shares is not something a broker will
+reliably fill, because the borrow is scarce and expensive. The
+measurement says the shape is right; the deployment has to use an index
+future or an ETF leg instead of these names, and that leg has to be
+priced against its own margin and financing.

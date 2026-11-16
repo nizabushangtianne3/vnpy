@@ -409,14 +409,14 @@ class AlphaLab:
 
     def save_dataset(self, name: str, dataset: AlphaDataset) -> None:
         """Save dataset"""
-        file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
-
-        f: BufferedWriter
-        with open(file_path, mode="wb") as f:
-            pickle.dump(dataset, f)
+        self.save_dataset_split(name, dataset)
 
     def load_dataset(self, name: str) -> AlphaDataset | None:
         """Load dataset"""
+        split: AlphaDataset | None = self.load_dataset_split(name)
+        if split is not None:
+            return split
+
         file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Dataset file {name} does not exist")
@@ -429,6 +429,14 @@ class AlphaLab:
 
     def remove_dataset(self, name: str) -> bool:
         """Remove dataset"""
+        directory: Path = self.dataset_path.joinpath(name)
+        if directory.joinpath("meta.pkl").exists():
+            for frame_path in directory.glob("*.parquet"):
+                frame_path.unlink()
+            directory.joinpath("meta.pkl").unlink()
+            directory.rmdir()
+            return True
+
         file_path: Path = self.dataset_path.joinpath(f"{name}.pkl")
         if not file_path.exists():
             logger.error(f"Dataset file {name} does not exist")
@@ -439,7 +447,13 @@ class AlphaLab:
 
     def list_all_datasets(self) -> list[str]:
         """List all datasets"""
-        return [file.stem for file in self.dataset_path.glob("*.pkl")]
+        names: set[str] = {file.stem for file in self.dataset_path.glob("*.pkl")}
+        names |= {
+            child.name
+            for child in self.dataset_path.iterdir()
+            if child.is_dir() and child.joinpath("meta.pkl").exists()
+        }
+        return sorted(names)
 
     def save_model(self, name: str, model: AlphaModel) -> None:
         """Save model"""
@@ -503,3 +517,66 @@ class AlphaLab:
     def list_all_signals(self) -> list[str]:
         """List all signals"""
         return [file.stem for file in self.signal_path.glob("*.parquet")]
+    def save_dataset_split(self, name: str, dataset: AlphaDataset) -> None:
+        """Save a dataset one frame at a time"""
+        directory: Path = self.dataset_path.joinpath(name)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        # Pickling a whole market-sized dataset blows up because polars
+        # serialises every frame into one in-memory buffer, so the peak is
+        # the dataset twice over. Writing each frame on its own keeps the
+        # peak at a single frame. Frames named here are the ones a dataset
+        # carries, plus whatever ``add_feature`` put in ``feature_results``.
+        frames: dict[str, pl.DataFrame] = {
+            key: value
+            for key, value in vars(dataset).items()
+            if isinstance(value, pl.DataFrame)
+        }
+        for key, frame in frames.items():
+            frame.write_parquet(directory.joinpath(f"{key}.parquet"))
+            setattr(dataset, key, None)
+
+        with open(directory.joinpath("meta.pkl"), mode="wb") as f:
+            pickle.dump(
+                {
+                    "frames": list(frames),
+                    "attributes": {
+                        key: value
+                        for key, value in vars(dataset).items()
+                        if key not in frames
+                    },
+                },
+                f,
+            )
+
+        # The frames are dropped above, so rebuild them in memory from what
+        # just landed on disk. A caller that keeps using the dataset after
+        # saving it should not find the frames gone.
+        for key in frames:
+            setattr(dataset, key, pl.read_parquet(directory.joinpath(f"{key}.parquet")))
+
+    def load_dataset_split(self, name: str) -> AlphaDataset | None:
+        """Load a dataset that was written one frame at a time"""
+        directory: Path = self.dataset_path.joinpath(name)
+        meta_path: Path = directory.joinpath("meta.pkl")
+        if not meta_path.exists():
+            return None
+
+        with open(meta_path, mode="rb") as f:
+            meta: dict = pickle.load(f)
+
+        dataset: AlphaDataset = AlphaDataset(
+            pl.DataFrame(),
+            ("", ""),
+            ("", ""),
+            ("", ""),
+        )
+        for key, value in meta["attributes"].items():
+            setattr(dataset, key, value)
+        for key in meta["frames"]:
+            setattr(dataset, key, pl.read_parquet(directory.joinpath(f"{key}.parquet")))
+        return dataset
+
+    def save_dataset(self, name: str, dataset: AlphaDataset) -> None:
+        """Save dataset"""
+        self.save_dataset_split(name, dataset)

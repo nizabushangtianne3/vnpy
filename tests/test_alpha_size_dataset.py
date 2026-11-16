@@ -256,3 +256,28 @@ class TestAugmentDataset:
         )
         assert nan_count > 0
         assert out.result_df.select(columns).null_count().row(0) == (0,) * len(columns)
+
+    def test_the_label_stays_the_last_column_of_every_frame(self, tmp_path):
+        module = load_module()
+        base = bars_frame().with_columns(
+            pl.lit(0.5).alias("factor_one"),
+            pl.lit(0.01).alias("label"),
+        )
+        dataset = self._fake_dataset(base)
+
+        sized = self._sized(base, tmp_path)
+        columns = module.size_feature_columns(windows=(2,))
+        out = module.augment_dataset(dataset, sized, columns)
+
+        # LgbModel reads its features as ``df.columns[2:-1]``, so a frame
+        # whose label is not last hands the model the answer it is graded
+        # against. On the market-sized cross-section that read as an IC of
+        # 0.99 and an ICIR of 219, which is the label and not a signal.
+        for frame_name in ("df", "result_df", "raw_df", "infer_df", "learn_df"):
+            frame = getattr(out, frame_name)
+            assert frame.columns[-1] == "label", (
+                f"{frame_name} ends with {frame.columns[-1]}, so the booster's "
+                "columns[2:-1] slice would read the label as a feature"
+            )
+            assert frame.columns[2:-1][-len(columns):] == columns
+            assert "label" not in frame.columns[2:-1]

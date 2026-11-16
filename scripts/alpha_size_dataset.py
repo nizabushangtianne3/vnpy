@@ -328,6 +328,17 @@ def augment_dataset(dataset, sized: pl.DataFrame, columns: list[str]):
             joined = joined.with_columns(
                 pl.col(column).fill_null(float("nan"))
             )
+        # ``LgbModel`` reads its features as ``df.columns[2:-1]``, so the
+        # label has to stay the last column of every frame it scores.
+        # Appending the size columns after it tells the model the label is
+        # a feature, and that reads as a near-perfect cross-sectional IC
+        # because it is the answer it is being graded against. Reordering
+        # the frame after the join keeps the label last.
+        if "label" in frame.columns:
+            head: list[str] = [
+                c for c in joined.columns if c not in columns and c != "label"
+            ]
+            joined = joined.select(head + columns + ["label"])
         setattr(new_dataset, frame_name, joined)
 
     return new_dataset
