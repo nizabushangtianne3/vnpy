@@ -851,3 +851,154 @@ What has not been measured is the gate on the whole market. The baseline that
 the gate is scored against reads 0.457 on 3021 names, and this run is on 355.
 The size dataset built on the full fetch is what the gate will be measured
 against, and until that run exists the gate still reads 0.457.
+
+## The size information set was already in the data, and it crosses the ICIR gate
+
+The float share fetch reached 2711 of 3021 names, and the size dataset built
+on it covers 91.8% of the bars. Scored on the full market-sized
+cross-section, 501 out-of-sample sessions, the same rolling fit at 900/250
+and the same seed as the baseline:
+
+| dataset | rank IC | ICIR | positive share | ICIR of a random signal |
+| --- | --- | --- | --- | --- |
+| market3000 (158 price factors) | 0.0464 | 0.465 | 0.695 | -0.014 |
+| market3000_size (price + 16 size factors) | 0.0587 | 0.519 | 0.685 | -0.014 |
+
+ICIR clears 0.50 for the first time on this factor set with this data
+source. Per year: 0.696 / 0.469 / 0.524 for the size run against
+0.477 / 0.421 / 0.520 for the baseline, so the lift is not one year.
+
+Two things have to be said plainly about the size columns, because both were
+found the hard way on the way here.
+
+### The label column moved, and that is a leak and not a signal
+
+The first code path that appended the size columns to the dataset put them
+after the label, and the booster reads its features as ``df.columns[2:-1]``.
+On a frame of 161 columns that slice is exactly the 158 price factors. On a
+frame of 177 columns it is the 158 factors plus the label, and the last size
+factor is cut off instead. The model that read the label as a feature
+scored IC 0.9946 and ICIR 219.7, which is the answer and not a prediction.
+
+The symptom is recognisable and worth naming: an IC near one means the
+signal and the label are the same series. The check is cheap. Rank
+correlate the signal against the label on a frame the model has scored and
+look for 0.99, because a cross-sectional signal on 3000 names that explains
+its own label perfectly is not a discovery.
+
+``augment_dataset`` now reorders every frame it touches so the label stays
+last, and a test pins the order, because the breakage is invisible in the
+frame's own column list: all 16 size columns and the label are still there.
+
+### The top-slice check was calling a correct join inconsistent
+
+``alpha_portfolio_probe.py`` compared a 30-name subset mean against the
+cross-day average of the quintile means and printed INCONSISTENT. Those are
+two averages of two populations. On 2025-03-03 the top 30 of 2893 names
+earned 3.59% against the quintile they live in at 1.63%, and every one of
+the 30 was inside that quintile. A 30-name subset of a 579-name quintile is
+free to out-earn the quintile, because forward returns are right-skewed and
+the top of the ranking is where the skew sits.
+
+What actually tests the join is the subset relation, so the check now counts
+rows of the top slice that sit outside the session's strongest quintile. On
+one session, 2026-11-06, only 114 names had a forward price, so the
+quintile boundary was 22 and ranks 24 to 30 were inside the slice and
+outside the quintile at once. That is a property of the session and it is
+reported rather than counted as a broken join.
+
+## The backtest says the same thing, and it says how far the goal still is
+
+The rolling signal in the real engine, with the real A-share costs (0.05%
+buy, 0.15% sell), 30 names, rebalanced every five sessions, from
+2024-09-26 to 2026-11-13:
+
+| setting | annualised | sharpe | commission fraction | turnover x capital | max drawdown |
+| --- | --- | --- | --- | --- | --- |
+| 158 price factors | 0.27% | 0.0085 | 0.427% | 4.28x | -2.33% |
+| price + size factors | 45.5% | 0.4085 | 0.236% | 2.37x | -1.86% |
+
+The commission gate is comfortable: 0.24% of capital against a 2% ceiling,
+and the size run also trades half as much. The sharpe gate is not: 0.41
+against a 1.0 target, on a base that read 0.0085.
+
+The distance between the two sharpe numbers is not a modelling artefact.
+``alpha_portfolio_probe`` reads 2.32 for the same signal because it measures
+the mean forward return of a static top slice and books no cost, so it is
+grading the ordering of the ranking rather than a book that pays to turn
+over. The two numbers answer different questions and the engine's is the one
+the goal asks about.
+
+Where the remaining distance lives is in the extreme days. The top-30 mean
+per session has a median near 0.6% and a maximum of 26%, and the best 5% of
+sessions carry 94.8% of the total. Those days are dominated by the new
+boards: of the 150 name-sessions across the five best days, 97 are 920xxx
+(Beijing) and 23 are 688xxx (Shanghai STAR), and of the 150 across the five
+worst days, 61 are 920xxx and 50 are 688xxx. Dropping both prefixes leaves
+a day-mean distribution with the same shape, so this is not only a new-board
+artefact, but the new boards are where the tails are thickest.
+
+## The 2026 collapse is market beta, not signal decay
+
+Two numbers had stopped agreeing. The rank IC in 2026 was the *best* of the
+three years -- 0.520 on the bare 158 factors and 0.524 with the size block
+added, against 0.477 and 0.421 for 2025 -- while the backtest over the same
+signal in the same year returned -39.9% annualised with a drawdown that ran
+265 days. A signal cannot keep ranking correctly for years and then lose
+its ability to rank in the year the book loses money, so the loss has to be
+coming from somewhere other than the ranking.
+
+The first question is whether the cross-section stopped spreading. It did
+not. Cross-sectional label dispersion (the per-session standard deviation of
+the label) is 0.074, 0.056 and 0.063 for 2024, 2025 and 2026, and 2026 sits
+between the other two years rather than below them.
+
+The second is whether the ranking is only long in name. It is not. Sorted
+into quintiles, with q0 the strongest call, the top-minus-bottom label
+spread is +0.0115, +0.0040 and +0.0065 for the three years, so 2026 separates
+the tails *better* than 2025 does, and the quintile means fall monotonically
+in all three years. Dropping the label for the running sessions and leaving
+15,105 null labels in 2026 does not change this -- they are concentrated on
+14 sessions, and removing them leaves the same ordering.
+
+What actually changed is the level. The label's own cross-sectional mean,
+which is the market's average forward return on those days, is +0.45%, +0.67%
+and -0.25% per session. 2026 was a falling market; in a falling market a
+long-only book of 30 names is being paid the market's drift before any skill
+applies. The whole thing showed up in the backtest rather than the IC
+because an IC is invariant to shifts.
+
+Regressing the top-30 mean forward return on the market's own mean settles
+it:
+
+| year | alpha/day | beta | corr |
+| --- | --- | --- | --- |
+| 2024 | +0.0188 | 1.69 | 0.80 |
+| 2025 | +0.0006 | 1.53 | 0.82 |
+| 2026 | +0.0041 | 1.55 | 0.69 |
+
+A beta of about 1.55 is not a modelling artefact, it is the book doing what
+it was built to do: holding the market with roughly 50% more of it. The
+correlation of 0.8 means the book's daily outcome is mostly the market's
+outcome. Year by year:
+
+| year | ungated/day | gated/day | exposure | gate |
+| --- | --- | --- | --- | --- |
+| 2024 | +0.54% | +1.03% | 80% | trailing-20d drift |
+| 2025 | +1.09% | +1.03% | 72% | trailing-20d drift |
+| 2026 | +0.05% | +0.66% | 45% | trailing-20d drift |
+
+The gate leaves every year positive on gross return with no re-fitting, and
+it turns the market's direction itself into the only thing that is being
+predicted, which is a much weaker claim than predicting 3,000 return series.
+With real A-share costs on the 2026 window it has to be re-measured, so the
+honest version of this line is that the beta looks like the cause and the
+gate is the obvious thing to test, and not that the gate has been shown to
+work.
+
+The neutralisation pass already established that removing market cap as a
+factor is a net loss, so the fix is not a factor. The fix is exposure: the
+signal should be asked about which names beat the market rather than which
+names go up. That is either a demeaned label, which is what the ranking
+already sees, carried through to a market-neutral book, or an explicit
+hedge. Both are a portfolio-layer change and neither is a tuning change.

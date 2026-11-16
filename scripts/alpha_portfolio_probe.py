@@ -18,12 +18,67 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 
 
 REPO: Path = Path(__file__).resolve().parents[1]
 BARS: str = "D:/Codex/work/vnpy-alpha-cache/stock_bars"
 SIGNAL: str = "D:/Codex/work/vnpy-alpha-cache/sweeps/market3000_rolling900_250.parquet"
+
+
+def market_beta(paired: pl.DataFrame) -> dict:
+    """Split a book's forward return into the market's part and the rest.
+
+    A long-only book of the strongest names is, to first order, a leveraged
+    claim on the market's own direction that day. Regressing the book's mean
+    forward return on the cross-section's mean forward return gives back the
+    part of the book that the market paid for (the slope) and the part it
+    did not (the intercept).
+
+    This matters because a rank IC is unchanged by a shift while a book is
+    not. On 2026 data the ranking ordered every quintile as well as it ever
+    had while the book lost money, and the only thing that had moved was the
+    market. Without this split the two are indistinguishable.
+
+    ``paired`` carries one row per session with ``book`` and ``market``.
+    """
+    if paired.height < 3:
+        return {}
+    markets = paired["market"].to_numpy()
+    books = paired["book"].to_numpy()
+    slope = float(np.polyfit(markets, books, 1)[0])
+    alpha = float(books.mean() - slope * markets.mean())
+    if not markets.std() or not books.std():
+        corr = 0.0
+    else:
+        corr = float(np.corrcoef(markets, books)[0, 1])
+    return {
+        "days": paired.height,
+        "book": float(books.mean()),
+        "market": float(markets.mean()),
+        "alpha": alpha,
+        "beta": slope,
+        "corr": corr,
+    }
+
+
+def neutral_top_slice(scored: pl.DataFrame, top_k: int) -> pl.DataFrame:
+    """The top slice paid relative to the session's own mean, not absolute.
+
+    Subtracting the cross-section's own mean forward return from every name
+    leaves a holding whose outcome does not depend on the market's direction,
+    which is the part a signal can be asked to produce. The absolute version
+    of the same book is what a long-only strategy earns and it is mostly beta.
+    """
+    relative = scored.with_columns(
+        (pl.col("fwd") - pl.col("fwd").mean().over("datetime")).alias("rel")
+    )
+    return (
+        relative.filter(pl.col("signal_rank") <= top_k)
+        .group_by("datetime")
+        .agg(pl.col("rel").mean().alias("rel"))
+    )
 
 
 def load_close() -> pl.DataFrame:
@@ -154,6 +209,13 @@ def main() -> int:
             .clip(0, 4)
             .alias("quintile")
         )
+        # Keep the quintile on the ranked frame too, so the alignment check
+        # below can ask of any row which quintile it sits in.
+        ranked = ranked.join(
+            quintiles.select(["datetime", "code", "quintile"]),
+            on=["datetime", "code"],
+            how="left",
+        )
         by_quintile = (
             quintiles.group_by(["datetime", "quintile"])
             .agg(pl.col("fwd").mean().alias("ret"))
@@ -167,19 +229,61 @@ def main() -> int:
         )
         print(f"  quintile mean forward return (1=strongest): {quintile_text}")
 
-        # The strongest 1% cannot beat the strongest quintile it sits in. If
-        # it does, the signal and the return are being joined on different
-        # rows, and every portfolio number below is fiction.
+        # What actually proves the join is aligned is a subset relation, not
+        # an inequality of averages. The top 30 names of a session are the 30
+        # strongest of that session, so every one of them has to sit inside
+        # the session's own strongest quintile. A row outside it means the
+        # signal and the return were joined on different rows.
+        #
+        # The earlier check compared the top-30 mean against the cross-day
+        # average of the quintile means. Those are two different averages of
+        # two different populations: a 30-name subset of a 579-name quintile
+        # is free to out-earn the quintile it lives in, because the forward
+        # returns are right-skewed and the top of the ranking is where the
+        # skew sits. On the flagged session the subset earned 3.59% against
+        # the quintile's 1.63% while every row of the subset was inside the
+        # quintile, so the old reading called a correct join inconsistent.
         top_slice = ranked.filter(pl.col("signal_rank") <= 30)
         top_mean = float(top_slice.group_by("datetime").agg(pl.col("fwd").mean())["fwd"].mean())
+        top_slice_size = 30
+        # A session whose scored cross-section holds fewer than five times
+        # the book cannot hold the subset relation: with fewer names than
+        # the quintile boundary needs, a rank inside the top slice can sit
+        # outside the strongest quintile at the same time. On 2026-11-06
+        # only 114 names had a forward price, so the boundary was 22 and
+        # ranks 24 to 30 were inside the slice and outside the quintile.
+        # That is a property of the session, not a broken join.
+        thick = ranked.filter(pl.col("n") >= top_slice_size * 5)
+        outside = int(
+            thick.filter(
+                (pl.col("signal_rank") <= top_slice_size) & (pl.col("quintile") != 0)
+            ).height
+        )
         top_quintile_mean = float(
             by_quintile.filter(pl.col("quintile") == 0)["mean_ret"][0]
         )
         print(
             f"  CHECK top30={top_mean * 100:.4f}% vs best quintile="
             f"{top_quintile_mean * 100:.4f}% "
-            f"{'OK' if top_mean <= top_quintile_mean + 1e-9 else 'INCONSISTENT'}"
+            f"top30_outside_quintile0={outside} "
+            f"{'OK' if outside == 0 else 'MISALIGNED JOIN'}"
         )
+
+        # A session where the scored cross-section is smaller than the book
+        # it is choosing from cannot hold the subset relation: with fewer
+        # names than five per quintile of the top slice, ranks past the
+        # quintile boundary are inside the top slice and outside the quintile
+        # at the same time. That is a property of the session, not a broken
+        # join, so it is reported rather than counted against the check.
+        thin = ranked.filter(pl.col("n") < top_slice_size * 5)
+        if thin.height:
+            thin_days = sorted(thin["datetime"].unique().to_list())
+            print(
+                f"  note {thin.height} rows on {len(thin_days)} sessions had "
+                f"fewer than {top_slice_size * 5} scored names "
+                f"({thin_days[0]} to {thin_days[-1]}), so the top-slice "
+                "subset check does not apply to them"
+            )
 
         # One session, printed out, settles it faster than more averages.
         one_day = sorted(ranked["datetime"].unique().to_list())[100]
@@ -283,6 +387,94 @@ def main() -> int:
                     f"mean={spread_mean * 100:.4f}% "
                     f"annualised={spread_mean * 240 * 100:.2f}% "
                     f"information_ratio={spread_ir:.3f}"
+                )
+
+        # The book's outcome and the market's outcome are not separable by
+        # looking at the book alone. A long-only ranking of 30 names is
+        # largely a leveraged claim on the market's own direction, so a
+        # year in which the book loses money can be a year in which the
+        # ranking was as good as it ever was. This splits the two: the
+        # book's mean forward return is regressed on the cross-section's
+        # own mean forward return, and what is left after the market is
+        # charged to the signal is the alpha.
+        print(f"--- market beta attribution, horizon {horizon} ---")
+        book = ranked.filter(pl.col("signal_rank") <= 30)
+        book_daily = book.group_by("datetime").agg(
+            pl.col("fwd").mean().alias("book")
+        )
+        market_daily = ranked.group_by("datetime").agg(
+            pl.col("fwd").mean().alias("market")
+        )
+        paired = book_daily.join(market_daily, on="datetime", how="inner")
+        attribution = market_beta(paired)
+        if attribution:
+            print(
+                f"  all days={attribution['days']} "
+                f"book={attribution['book'] * 100:.4f}% "
+                f"market={attribution['market'] * 100:.4f}% "
+                f"alpha={attribution['alpha'] * 100:.4f}% "
+                f"beta={attribution['beta']:.2f} "
+                f"corr={attribution['corr']:.2f}"
+            )
+            for year in sorted(
+                paired["datetime"].str.slice(0, 4).unique().to_list()
+            ):
+                part = paired.filter(
+                    pl.col("datetime").str.slice(0, 4) == year
+                )
+                year_attribution = market_beta(part)
+                if not year_attribution:
+                    continue
+                print(
+                    f"  {year} days={year_attribution['days']} "
+                    f"book={year_attribution['book'] * 100:.4f}% "
+                    f"market={year_attribution['market'] * 100:.4f}% "
+                    f"alpha={year_attribution['alpha'] * 100:.4f}% "
+                    f"beta={year_attribution['beta']:.2f} "
+                    f"corr={year_attribution['corr']:.2f}"
+                )
+
+        # The market-neutral version of the same book. Subtracting the
+        # session's own mean forward return from every name leaves a
+        # holding that is paid for selecting names rather than for the
+        # market's direction, which is the only part a signal can be
+        # asked to produce.
+        print(f"--- market-neutral top-30, horizon {horizon} ---")
+        neutral_daily = neutral_top_slice(ranked, 30)
+        for label, low, high in (
+            ("all", args.date_from, args.date_to),
+        ):
+            part = neutral_daily.filter(
+                (pl.col("datetime") >= low) & (pl.col("datetime") <= high)
+            )
+            if part.is_empty():
+                continue
+            mean_rel = float(part["rel"].mean())
+            std_rel = float(part["rel"].std()) if len(part) > 1 else 0.0
+            sharpe_rel = (
+                mean_rel / std_rel * (240.0 ** 0.5) if std_rel else 0.0
+            )
+            print(
+                f"  {label} sessions={part.height} "
+                f"rel_mean={mean_rel * 100:.4f}% "
+                f"annualised={mean_rel * 240 * 100:.2f}% "
+                f"sharpe={sharpe_rel:.2f}"
+            )
+            for year in sorted(
+                part["datetime"].str.slice(0, 4).unique().to_list()
+            ):
+                slot = part.filter(pl.col("datetime").str.slice(0, 4) == year)
+                if slot.height < 3:
+                    continue
+                slot_mean = float(slot["rel"].mean())
+                slot_std = float(slot["rel"].std()) if slot.height > 1 else 0.0
+                slot_ir = (
+                    slot_mean / slot_std * (240.0 ** 0.5) if slot_std else 0.0
+                )
+                print(
+                    f"    {year} days={slot.height} "
+                    f"rel_mean={slot_mean * 100:.4f}% "
+                    f"sharpe={slot_ir:.2f}"
                 )
 
         # A rank slice can be taken from the top of the ranking or from a
