@@ -230,10 +230,10 @@ class MarketNeutralStrategy(AlphaStrategy):
         per_name: float = target_value / len(hedge_pool)
 
         for vt_symbol in hedge_pool:
-            bar: BarData | None = bars.get(vt_symbol)
-            if not bar or bar.close_price <= 0:
+            hedge_bar: BarData | None = bars.get(vt_symbol)
+            if not hedge_bar or hedge_bar.close_price <= 0:
                 continue
-            shares: float = self._lots(per_name / bar.close_price)
+            shares: float = self._lots(per_name / hedge_bar.close_price)
             if shares > 0:
                 self.set_target(vt_symbol, target=-shares)
 

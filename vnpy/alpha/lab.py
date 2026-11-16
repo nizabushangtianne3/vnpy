@@ -576,7 +576,3 @@ class AlphaLab:
         for key in meta["frames"]:
             setattr(dataset, key, pl.read_parquet(directory.joinpath(f"{key}.parquet")))
         return dataset
-
-    def save_dataset(self, name: str, dataset: AlphaDataset) -> None:
-        """Save dataset"""
-        self.save_dataset_split(name, dataset)
