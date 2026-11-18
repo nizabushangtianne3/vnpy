@@ -1329,6 +1329,28 @@ The book's graded return was -0.30 percent long-only and -0.30 to -3.56 percent 
 
 What the book did not do is avoid the fall. Its 2026 net exposure was between a quarter and a third of capital, which is a market-neutral book carrying a quarter of the market's beta, and the benchmark table shows the price of that: a genuinely measured neutral book would have lost roughly nothing in 2026 rather than 0.30 percent, and would have earned far less than 17.58 percent in 2025. The book's shape is not the problem. The problem is that its whole contribution, fit half and graded half together, is no larger than the market's noise.
 
+The fall is not one month. `510300.SSE`, session by session, calendar 2026:
+
+| month | total% |
+| --- | --- |
+| 01 | -0.88 |
+| 02 | +0.30 |
+| 03 | -5.54 |
+| 04 | +8.09 |
+| 05 | +2.05 |
+| 06 | +1.95 |
+| 07 | -7.29 |
+| 08 | +0.69 |
+| 09 | -5.40 |
+| 10 | -8.28 |
+| 11 | +0.44 |
+
+Four separate months each lost five to eight percent and the year lost 14.10
+percent, so a book sized for a single drawdown is not sized for this market.
+The book's own graded loss is spread over the same sessions rather than
+concentrated, which is consistent with it being the same exposure rather than
+a bad month.
+
 The first version of this measurement was wrong and the error is worth recording, because it would have produced the opposite conclusion. Compounding 208 overlapping five-session returns on `510300.SSE` reads **-51.68** percent for 2026, while the same year reads **-14.10** percent compounded session by session, **-14.33** percent in non-overlapping five-session blocks, and **-15.71** percent from the first close of the window to the last. The overlapping figure counts the same price move about four times over. A market that appears to fall by half justifies any loss, and only a fixed clock shows the book beat it.
 
 ## What is next
