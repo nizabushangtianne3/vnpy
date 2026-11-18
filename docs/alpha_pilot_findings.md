@@ -1311,6 +1311,26 @@ This closes the horizon question in the direction nobody wanted: a longer horizo
 
 So all three fronts this note has left open are now closed, and none of them pays. The ratio does not transfer out of sample and the two halves rank it in opposite directions. The long side earns 17.58 percent on the fit half and loses money on the graded half. The longer horizon loses money faster. What remains is not a parameter to tune. It is the observation, repeated in each of these measurements, that the book's return is the market's return: the graded half's losses are 2026 market beta in every configuration tried, with the net exposure between 0.26 and 0.29 of capital, and the fit half's gains are the same exposure pointed the other way.
 
+## The graded half's loss is not the market's, and the book paid it anyway
+
+Every run above loses money on the graded half and every one of them blames 2026, because 2026 is where the loss sits. This is the claim that decides whether the blame is right, so it was tested against benchmarks the book is not built out of, computed from the same cached bars on one session-by-session clock: equal weight over every stock, the top decile by trailing turnover, and `510300.SSE`, the instrument the hedge leg actually trades.
+
+The graded window is split at the year boundary, and the two halves of it are different markets:
+
+| benchmark | 2025 sessions | 2025 total% | 2026 sessions | 2026 total% |
+| --- | --- | --- | --- | --- |
+| 510300.SSE | 60 | +0.253 | 208 | -14.096 |
+| equal weight, every stock | 60 | +6.119 | 208 | -4.253 |
+| top decile by turnover | 60 | -3.719 | 208 | -23.222 |
+
+The equal-weight number is an average and the median stock did much worse. Over 2026 the median stock returned -18.91 percent and 78.8 percent of the 2713 stocks in the cache were negative, so the market's -4.25 percent mean is a right tail of winners pulling an average over a distribution whose centre lost far more. Both numbers are reported because they answer different questions: the mean is what an equal-weight book earns, the median is what a randomly chosen stock lost.
+
+The book's graded return was -0.30 percent long-only and -0.30 to -3.56 percent depending on the signal and ratio. Against a market that returned -4.25 percent on the mean and -18.91 percent at the median, a book that lost 0.30 percent **beat the market**. The book did not pay for 2026; it was paid less than the market paid everyone else. The claim the sections above were carrying, that the graded half lost to market beta, is wrong in the direction that matters: the loss is smaller than the market's own loss on every one of these readings.
+
+What the book did not do is avoid the fall. Its 2026 net exposure was between a quarter and a third of capital, which is a market-neutral book carrying a quarter of the market's beta, and the benchmark table shows the price of that: a genuinely measured neutral book would have lost roughly nothing in 2026 rather than 0.30 percent, and would have earned far less than 17.58 percent in 2025. The book's shape is not the problem. The problem is that its whole contribution, fit half and graded half together, is no larger than the market's noise.
+
+The first version of this measurement was wrong and the error is worth recording, because it would have produced the opposite conclusion. Compounding 208 overlapping five-session returns on `510300.SSE` reads **-51.68** percent for 2026, while the same year reads **-14.10** percent compounded session by session, **-14.33** percent in non-overlapping five-session blocks, and **-15.71** percent from the first close of the window to the last. The overlapping figure counts the same price move about four times over. A market that appears to fall by half justifies any loss, and only a fixed clock shows the book beat it.
+
 ## What is next
 
 The three fronts this note used to carry forward are all closed, and the answers are in. The ratio does not transfer out of sample, and the fit and graded halves rank it in opposite directions, so no single value of it is good in both. The long side earns 17.58 percent on the fit half and loses 0.30 percent on the graded half. Retraining at the 10-session horizon loses money faster on both halves, 5.89 and -3.56 percent against 17.58 and -0.30.
