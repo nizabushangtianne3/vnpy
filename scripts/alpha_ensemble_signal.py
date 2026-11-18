@@ -30,8 +30,7 @@ from pathlib import Path
 REPO: Path = Path(__file__).resolve().parents[1]
 DEFAULT_LAB: str = "D:/Codex/work/vnpy-alpha-cache/alpha_lab"
 DEFAULT_OUT: str = (
-    "D:/Codex/work/vnpy-alpha-cache/sweeps/"
-    "market3000_size_rolling900_250_ens.parquet"
+    "D:/Codex/work/vnpy-alpha-cache/sweeps/market3000_size_rolling900_250_ens.parquet"
 )
 
 
@@ -45,6 +44,19 @@ def load_gate():
     return module
 
 
+def default_output(dataset: str, train_window: int, step: int, hold_days: int) -> str:
+    """Keep horizons in separate caches so h=5 cannot be overwritten."""
+    if (
+        dataset == "market3000_size"
+        and train_window == 900
+        and step == 250
+        and hold_days == 5
+    ):
+        return DEFAULT_OUT
+    stem = f"{dataset}_rolling{train_window}_{step}_h{hold_days}_ens"
+    return str(Path(DEFAULT_OUT).with_name(f"{stem}.parquet"))
+
+
 def main() -> int:
     """Refit over the seeds and cache the average."""
     parser = argparse.ArgumentParser(description="Multi-seed rolling signal")
@@ -54,7 +66,7 @@ def main() -> int:
     parser.add_argument("--train-window", type=int, default=900)
     parser.add_argument("--step", type=int, default=250)
     parser.add_argument("--hold-days", type=int, default=5)
-    parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--out", default="")
     parser.add_argument("--json", default="")
     args = parser.parse_args()
 
@@ -66,6 +78,8 @@ def main() -> int:
     if dataset is None:
         print(f"没有找到数据集：{args.dataset}")
         return 2
+
+    gate.relabel(dataset, args.hold_days)
 
     print(
         f"数据集 {args.dataset}: train={dataset.data_periods} "
@@ -82,7 +96,10 @@ def main() -> int:
         print("滚动预测为空")
         return 2
 
-    out = Path(args.out)
+    out = Path(
+        args.out
+        or default_output(args.dataset, args.train_window, args.step, args.hold_days)
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     scored.write_parquet(out)
     print(f"写入 {out} 行数={scored.height}")
