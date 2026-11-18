@@ -42,6 +42,12 @@ KLINE_FIELDS: str = "f51,f52,f53,f54,f55,f56,f57"
 # secid MARKET.SYMBOL prefixes, read from live responses rather than guessed:
 # a CFFEX index quotes under 220, and the widely copied "8" returns nothing.
 EM_MARKET: dict[str, str] = {
+    # A-share equities share the "0"/"1" prefix space with the cash exchanges
+    # rather than the futures one, and a futures-style prefix returns nothing
+    # for a stock, so these have to be declared explicitly.
+    "SSE": "1",
+    "SZSE": "0",
+    "BSE": "0",
     "CFFEX": "220",
     "SHFE": "113",
     "DCE": "114",
@@ -294,7 +300,26 @@ def resolve_scale(bar: MinuteBar, contract: ContractData) -> float:
     known: float | None = KNOWN_PRICE_SCALE.get(price_symbol(contract.symbol))
     if known is not None:
         return known
+    # An equity quotes in yuan per share, so the bar's own reading is the
+    # price. Leaving it to the integer-shape fallback would divide a whole
+    # hundred-yuan stock by ten, which is a plausible-looking wrong price
+    # and the most dangerous kind to miss.
+    if _is_equity(contract):
+        return 1.0
     return bar.effective_scale
+
+
+def _is_equity(contract: ContractData) -> bool:
+    """Tell an equity contract from a futures one by the exchange it trades on.
+
+    The A-share cash exchanges carry their own products (stocks, ETFs, bonds),
+    and every one of them quotes in yuan with one share as the unit, so the
+    scale is 1 for all of them. Deciding this from the exchange rather than
+    from Product.EQUITY keeps it working for the paper account's contract
+    records, which are built per instrument rather than by the product enum.
+    """
+    value: str = contract.exchange.value
+    return value in ("SSE", "SZSE", "BSE")
 
 
 def _align(price: float, pricetick: float) -> float:

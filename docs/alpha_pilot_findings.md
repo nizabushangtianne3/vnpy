@@ -1136,3 +1136,83 @@ What this still does not settle is the deployment leg. The short side is
 still a basket of individual A-shares in the measurement, and a live book
 has to hold that exposure through an index future or an ETF, priced with
 its own margin and financing.
+
+## The 30-day clock did not have an IC-backed signal behind it
+
+The table above is the engine's book, not the signal's grade. The signal
+that produced it was the rolling single-seed size fit, and its cached
+label was five sessions. A horizon scan on that same signal, with
+``alpha_gate.py --rolling 900 250 --hold-days N`` refitting the rolling
+book at every horizon, reads:
+
+| hold | IC | ICIR | positive IC |
+| --- | --- | --- | --- |
+| 5 | 0.0380 | 0.3889 | 66.7% |
+| 10 | 0.0415 | 0.3853 | 62.4% |
+| 15 | 0.0457 | 0.3751 | 65.6% |
+| 20 | 0.0406 | 0.3147 | 59.1% |
+| 25 | 0.0246 | 0.1836 | 51.0% |
+| 30 | 0.0273 | 0.1952 | 49.2% |
+
+The 5, 10, 15 and 20-day rows fail ICIR; 15 also clears IC but not by
+enough to survive the full gate. The 30-day row fails all three IC
+gates. So the 30-day engine book was a well-behaved book on a signal
+whose own horizon never passed, and that result cannot be the paper
+trigger.
+
+The 5-day ensemble did clear the IC gates, reading IC 0.0615, ICIR
+0.5196 and positive IC 69.5% over 501 sessions, with all three years
+positive. The next measurement is the ensemble refit at a horizon that
+matches a slower clock, starting with 10 sessions. Until one horizon
+clears all five gates on the same signal and the same clock, the
+deployment-leg work stays behind the gate.
+
+## The hedge leg was outside the turnover cap
+
+The neutral book sent its orders through two separate accounting paths.
+``MarketNeutralStrategy.on_bars`` charged the sell proceeds to the long
+leg's ``max_turnover_ratio`` and then called ``_rebalance_hedge``, which
+derived the short side's share count from the book it was leaving and set
+that target directly. The cap therefore bounded the buys and the sells
+while the hedge re-set its target every rebalance unmeasured, so the
+gross the book actually turned was however much the hedge wanted.
+
+The two legs now share one budget. Each leg records its own delta in a
+single ``long_deltas`` map, the hedge is sized against the book the long
+legs are becoming rather than the one they are leaving, and one
+``scale_turnover`` call scales the merged map down until its gross
+notional fits the cap. The hedge is scaled once, with the long side,
+rather than on its own and then again as part of the book, because
+scaling it twice would quietly change the hedge ratio from the one the
+setting declares.
+
+A second rounding fault sat underneath it. ``_lots`` rounded a share
+count with ``round_to``, so a budget of 50 shares under a 100-share
+board lot became 100, doubling the volume the book ordered. It now
+floors instead, in both the neutral and the band strategy.
+
+On the ensemble signal with the default 0.30 cap, the same five gates
+pass on one clock:
+
+| metric | value |
+| --- | --- |
+| total return | 18.354% |
+| annual return | 8.5533% |
+| sharpe | 1.293 |
+| max drawdown | -6.3393% |
+| turnover x capital | 6.8261 |
+| commission / capital | 0.6995% |
+| trades | 7160 |
+
+Per year, the net profit is positive in all three: 2024 +2.73M, 2025
++3.76M, 2026 +11.87M.
+
+What this still does not settle is the deployment leg. Those numbers
+come from the backtesting engine, and the runner that would carry them
+into a paper account still has no A-share tick source: ``DerivedFeed``
+mapped only the futures exchanges, so an equity secid built no key and
+a stock never got a tick. The three cash exchanges are now declared,
+and an equity's price is no longer rescaled by the integer shape of its
+bar, which would have divided a 1685 yuan stock by ten. The path from a
+signal to a paper fill has one less break in it; it has not yet been
+run end to end.

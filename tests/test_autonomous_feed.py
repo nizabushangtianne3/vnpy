@@ -97,9 +97,57 @@ def test_secid_uses_the_resolved_exchange_market() -> None:
     """A wrong market prefix silently returns nothing; the map is explicit."""
     assert secid_for("m2705", Exchange.DCE) == "114.m2705"
     assert secid_for("IF2612", Exchange.CFFEX) == "220.IF2612"
+    # An unmapped exchange must fail loudly rather than build a key that
+    # returns nothing and looks like a bad symbol.
+    # LOCAL and SMART carry no Eastmoney market and no cached bars.
     with pytest.raises(ValueError):
-        secid_for("600519", Exchange.SSE)
+        secid_for("m2705", Exchange.LOCAL)
 
+
+def test_secid_covers_the_a_share_cash_exchanges() -> None:
+    """An equity fetched with a futures prefix returns nothing, and the
+    failure looks identical to a bad symbol rather than a missing mapping,
+    so the cash exchanges have to be declared just as explicitly as the
+    futures ones.
+    """
+    assert secid_for("600519", Exchange.SSE) == "1.600519"
+    assert secid_for("000001", Exchange.SZSE) == "0.000001"
+    assert secid_for("830799", Exchange.BSE) == "0.830799"
+
+
+def _equity_contract(exchange: Exchange) -> ContractData:
+    """A stock, which quotes in yuan per share."""
+    return ContractData(
+        gateway_name="TEST",
+        symbol="600519",
+        exchange=exchange,
+        name="600519",
+        product=Product.EQUITY,
+        size=1,
+        pricetick=0.01,
+    )
+
+
+def test_equity_price_is_not_rescaled_by_its_shape() -> None:
+    """A whole-number share price is a real price, not a scaled integer.
+
+    The futures fallback divides an integer at or above a thousand by ten,
+    and a 1685 yuan stock lands in exactly that band, so trusting the bar's
+    shape would price the position a tenth of what it is.
+    """
+    stock: ContractData = _equity_contract(Exchange.SSE)
+
+    assert resolve_scale(_bar(1685.0, 1684.0, 1686.0), stock) == 1.0
+
+
+def test_equity_tick_carries_the_real_share_price() -> None:
+    """The paper account's fills are priced from this tick."""
+    tick = build_tick(_bar(1685.0, 1684.0, 1686.0), _equity_contract(Exchange.SSE))
+
+    assert tick is not None
+    assert tick.last_price == pytest.approx(1685.0)
+    assert tick.bid_price_1 == pytest.approx(1684.0)
+    assert tick.ask_price_1 == pytest.approx(1686.0)
 
 def test_scale_is_declared_per_symbol() -> None:
     """Soybean meal arrives as tenths and Shanghai gold already in yuan.
