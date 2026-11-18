@@ -61,6 +61,27 @@ def scale_turnover(
     }
 
 
+def projected_long_value(
+    positions: dict[str, float],
+    deltas: dict[str, float],
+    bars: dict[str, BarData],
+) -> float:
+    """Value of the long book after the planned position changes."""
+    value: float = 0.0
+    for vt_symbol, position in positions.items():
+        if position <= 0:
+            continue
+        bar: BarData | None = bars.get(vt_symbol)
+        if bar:
+            value += bar.close_price * position
+    for vt_symbol, delta in deltas.items():
+        bar = bars.get(vt_symbol)
+        if not bar:
+            continue
+        value += bar.close_price * delta
+    return value
+
+
 def hedge_basket(
     bars: dict[str, BarData], count: int, exclude: set[str]
 ) -> list[str]:
@@ -89,6 +110,7 @@ class MarketNeutralStrategy(AlphaStrategy):
     buffer_ratio: float = 0.10   # how far a held name may move and keep its place
     hedge_ratio: float = 1.0     # short value per unit of long value
     hedge_count: int = 30        # names in the short basket
+    hedge_symbol: str = ""       # one tradable hedge instrument, e.g. 510300.SSE
     rebalance_days: int = 30     # sessions between two rebalances
     min_days: int = 5            # sessions a new long holding must wait
     max_turnover_ratio: float = 0.3
@@ -227,19 +249,11 @@ class MarketNeutralStrategy(AlphaStrategy):
         # The hedge is sized against the book the long legs are becoming,
         # not the one they are leaving: sizing it off the stale positions
         # would hedge the previous book and leave the new one exposed.
-        long_value: float = 0.0
-        for vt_symbol, pos in self.pos_data.items():
-            if pos <= 0:
-                continue
-            position_bar: BarData | None = bars.get(vt_symbol)
-            if position_bar:
-                long_value += position_bar.close_price * pos
-        for vt_symbol, delta in long_deltas.items():
-            if delta <= 0:
-                continue
-            bar = bars.get(vt_symbol)
-            if bar:
-                long_value += bar.close_price * delta
+        long_value: float = projected_long_value(
+            self.pos_data,
+            long_deltas,
+            bars,
+        )
 
         self._rebalance_hedge(
             hedge_pool,
@@ -267,6 +281,8 @@ class MarketNeutralStrategy(AlphaStrategy):
         cached bars carry volume but not turnover, so close times volume is
         what the basket is ranked on.
         """
+        if self.hedge_symbol:
+            return [self.hedge_symbol]
         if self._cached_hedge_pool:
             return self._cached_hedge_pool
         self._cached_hedge_pool = hedge_basket(bars, self.hedge_count, set())

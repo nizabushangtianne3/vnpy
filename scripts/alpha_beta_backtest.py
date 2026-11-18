@@ -24,16 +24,19 @@ import argparse
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 
 from vnpy.alpha import AlphaLab
-from vnpy.alpha.strategy import BacktestingEngine
+from vnpy.alpha.strategy import AlphaStrategy, BacktestingEngine
+from vnpy.autonomous.stocks import _fetch_window
 from vnpy.alpha.strategy.strategies.market_neutral_strategy import (
     MarketNeutralStrategy,
 )
 from vnpy.alpha.strategy.strategies.rank_band_strategy import RankBandStrategy
-from vnpy.trader.constant import Interval
+from vnpy.trader.constant import Exchange, Interval
+from vnpy.trader.object import BarData
 
 
 DEFAULT_LAB: str = "D:/Codex/work/vnpy-alpha-cache/alpha_lab"
@@ -41,6 +44,72 @@ DEFAULT_SIGNAL: str = (
     "D:/Codex/work/vnpy-alpha-cache/sweeps/"
     "market3000_size_rolling900_250_s42.parquet"
 )
+
+
+def load_hedge_bars(hedge_symbol: str, start: str, end: str) -> list:
+    """Load unadjusted daily bars for the hedge instrument.
+
+    The strategy's own bars are already forward-adjusted A-share bars, but
+    an ETF or index-future leg has to be priced on the exact instrument the
+    broker can trade, so its bars are fetched separately from the public
+    kline host rather than reused from the signal's price factors.
+    """
+    symbol, _, market = hedge_symbol.partition(".")
+    if market not in ("SSE", "SZSE"):
+        raise ValueError(f"对冲标的上交所或深交所之外的代码：{hedge_symbol}")
+    secid = f"{('1' if market == 'SSE' else '0')}.{symbol}"
+    began = datetime.strptime(start, "%Y-%m-%d").strftime("%Y%m%d")
+    finished = datetime.strptime(end, "%Y-%m-%d").strftime("%Y%m%d")
+    bars = _fetch_window(secid, "101", began, finished, fqt="0")
+    if not bars:
+        raise ValueError(f"无法加载对冲标的行情：{hedge_symbol}")
+    # The kline parser leaves the instrument blank and lets the caller name
+    # it, so an unnamed hedge leg would land in the lab under a vt_symbol
+    # the strategy never asks for.
+    market_exchange = Exchange.SSE if market == "SSE" else Exchange.SZSE
+    for bar in bars:
+        # vt_symbol is a snapshot taken when the dataclass was built, so
+        # rewriting symbol alone leaves the leg answering to a blank name.
+        bar.symbol = symbol
+        bar.exchange = market_exchange
+        bar.vt_symbol = f"{symbol}.{market_exchange.value}"
+    return bars
+
+
+def exposure(engine: BacktestingEngine, capital: float) -> dict:
+    """The real exposures the engine's cash book cannot see by itself.
+
+    The engine's own equity figure subtracts a short position's market value
+    as if selling the position released cash the account may spend, which
+    is true for a closed trade and false for a security the book still owes.
+    A neutral book therefore has to be audited on gross, long and short
+    exposure separately, because a hedge sized off one definition can look
+    profitable while the account is silently leveraged.
+    """
+    long_value: float = 0.0
+    short_value: float = 0.0
+    for vt_symbol, position in engine.strategy.pos_data.items():
+        if not position:
+            continue
+        bar = engine.bars.get(vt_symbol)
+        price = bar.close_price if bar else 0.0
+        if position > 0:
+            long_value += price * position
+        else:
+            short_value += price * abs(position)
+    trades = engine.get_all_trades()
+    hedge_trades = [
+        trade
+        for trade in trades
+        if trade.vt_symbol == getattr(engine.strategy, "hedge_symbol", "")
+    ]
+    return {
+        "long_x_capital": round(long_value / capital, 4),
+        "short_x_capital": round(short_value / capital, 4),
+        "net_x_capital": round((long_value - short_value) / capital, 4),
+        "gross_x_capital": round((long_value + short_value) / capital, 4),
+        "hedge_trade_count": len(hedge_trades),
+    }
 
 
 def build_engine(
@@ -56,6 +125,7 @@ def build_engine(
     buffer_ratio: float,
     hedge_ratio: float,
     hedge_count: int,
+    hedge_symbol: str,
     rebalance_days: int,
     min_days: int,
     max_turnover_ratio: float,
@@ -72,13 +142,14 @@ def build_engine(
         capital=int(capital),
     )
     if strategy == "neutral":
-        strategy_class = MarketNeutralStrategy
+        strategy_class: type[AlphaStrategy] = MarketNeutralStrategy
         strategy_setting = {
             "band_low": band_low,
             "band_high": band_high,
             "buffer_ratio": buffer_ratio,
             "hedge_ratio": hedge_ratio,
             "hedge_count": hedge_count,
+            "hedge_symbol": hedge_symbol,
             "rebalance_days": rebalance_days,
             "min_days": min_days,
             "max_turnover_ratio": max_turnover_ratio,
@@ -145,15 +216,15 @@ def yearly(engine: BacktestingEngine) -> dict:
         balance = net.cum_sum()
         peak = balance.cum_max()
         drawdown = balance - peak
-        std = float(net.std()) if total_days > 1 else 0.0
-        mean = float(net.mean())
+        std = cast(float, net.std() or 0.0) if total_days > 1 else 0.0
+        mean = cast(float, net.mean() or 0.0)
         key = year[0] if isinstance(year, tuple) else year
         out[str(key)] = {
             "sessions": int(total_days),
-            "net_pnl": round(float(net.sum()), 2),
+            "net_pnl": round(cast(float, net.sum()), 2),
             "mean_pnl": round(mean, 2),
             "sharpe": round(mean / std * (240.0 ** 0.5), 4) if std else 0.0,
-            "max_drawdown": round(float(drawdown.min()), 2),
+            "max_drawdown": round(cast(float, drawdown.min()), 2),
         }
     return out
 
@@ -192,6 +263,11 @@ def main() -> int:
         default=30,
         help="names in the short basket",
     )
+    parser.add_argument(
+        "--hedge-symbol",
+        default="",
+        help="single hedge instrument, e.g. 510300.SSE; empty uses the stock basket",
+    )
     parser.add_argument("--rebalance-days", type=int, default=30)
     parser.add_argument("--min-days", type=int, default=5)
     parser.add_argument("--max-turnover-ratio", type=float, default=0.3)
@@ -209,6 +285,8 @@ def main() -> int:
     print(f"signal rows: {signal.height}, symbols: {signal['vt_symbol'].n_unique()}")
 
     vt_symbols: list[str] = sorted(signal["vt_symbol"].unique().to_list())
+    if args.hedge_symbol and args.hedge_symbol not in vt_symbols:
+        vt_symbols.append(args.hedge_symbol)
     lab = AlphaLab(args.lab)
     # The engine charges the commission from the lab's contract settings, so
     # the cost sensitivity has to be written there and not only into the
@@ -218,6 +296,14 @@ def main() -> int:
             continue
         lab.add_contract_setting(
             vt_symbol=vt_symbol,
+            long_rate=args.open_rate,
+            short_rate=args.close_rate,
+            size=1.0,
+            pricetick=0.01,
+        )
+    if args.hedge_symbol:
+        lab.add_contract_setting(
+            vt_symbol=args.hedge_symbol,
             long_rate=args.open_rate,
             short_rate=args.close_rate,
             size=1.0,
@@ -237,6 +323,14 @@ def main() -> int:
     else:
         bands = [(args.band_low, args.band_high)]
 
+    if args.hedge_symbol:
+        print(f"加载对冲标的 {args.hedge_symbol}")
+        hedge_bars: list[BarData] = load_hedge_bars(
+            args.hedge_symbol, args.start, args.end
+        )
+        lab.save_bar_data(hedge_bars)
+        print(f"hedge bars: {len(hedge_bars)}")
+
     results: list[dict] = []
     for low, high in bands:
         print(f"=== band {low:.2f}-{high:.2f} ===")
@@ -253,6 +347,7 @@ def main() -> int:
             args.buffer_ratio,
             args.hedge_ratio,
             args.hedge_count,
+            args.hedge_symbol,
             args.rebalance_days,
             args.min_days,
             args.max_turnover_ratio,
@@ -261,6 +356,9 @@ def main() -> int:
         )
         summary = summarise(engine, args.capital)
         by_year = yearly(engine)
+        if args.strategy == "neutral":
+            audit = exposure(engine, args.capital)
+            summary.update(audit)
         result = {
             "strategy": args.strategy,
             "band": [low, high],

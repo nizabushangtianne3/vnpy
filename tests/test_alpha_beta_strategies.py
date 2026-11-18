@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import cast
 
 from vnpy.trader.object import BarData
 from vnpy.trader.constant import Exchange, Interval
 from datetime import datetime
+
+from vnpy.alpha.strategy.backtesting import BacktestingEngine
 
 
 REPO: Path = Path(__file__).resolve().parents[1]
@@ -130,6 +133,31 @@ def test_hedge_basket_honours_its_count():
         "B.SZSE": make_bar("B.SZSE", 10.0, 2_000),
     }
     assert len(neutral.hedge_basket(bars, count=30, exclude=set())) == 2
+
+
+def test_single_hedge_symbol_overrides_the_liquid_basket():
+    """A named hedge instrument is the deployment path, not a stock basket."""
+    strategy = neutral.MarketNeutralStrategy(
+        cast(BacktestingEngine, object()),
+        "neutral",
+        [],
+        {"hedge_symbol": "510300.SSE"},
+    )
+
+    assert strategy._hedge_basket({}) == ["510300.SSE"]
+
+
+def test_projected_long_value_subtracts_planned_sells():
+    """The hedge must be sized against the book the longs are becoming."""
+    bars = {
+        "A.SZSE": make_bar("A.SZSE", 10.0, 1_000),
+        "B.SZSE": make_bar("B.SZSE", 5.0, 1_000),
+        "C.SZSE": make_bar("C.SZSE", 2.0, 1_000),
+    }
+    positions = {"A.SZSE": 100.0, "B.SZSE": -10.0}
+    deltas = {"A.SZSE": -100.0, "B.SZSE": 50.0, "C.SZSE": 20.0}
+
+    assert neutral.projected_long_value(positions, deltas, bars) == 290.0
 
 
 def test_turnover_cap_scales_the_long_and_hedge_legs_together():
