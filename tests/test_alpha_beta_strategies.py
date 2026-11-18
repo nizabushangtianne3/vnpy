@@ -132,6 +132,33 @@ def test_hedge_basket_honours_its_count():
     assert len(neutral.hedge_basket(bars, count=30, exclude=set())) == 2
 
 
+def test_turnover_cap_scales_the_long_and_hedge_legs_together():
+    """One cap must cover the whole book, not only the long leg."""
+    deltas = {
+        "LONG.SZSE": 1000.0,
+        "HEDGE.SZSE": 1000.0,
+    }
+    prices = {
+        "LONG.SZSE": 10.0,
+        "HEDGE.SZSE": 10.0,
+    }
+
+    scaled = neutral.scale_turnover(deltas, prices, cap=10_000.0)
+    gross = sum(abs(delta) * prices[symbol] for symbol, delta in scaled.items())
+
+    assert gross == 10_000.0
+    assert scaled["LONG.SZSE"] == 500.0
+    assert scaled["HEDGE.SZSE"] == 500.0
+
+
+def test_turnover_cap_leaves_a_small_book_unchanged():
+    """A book already inside the cap must not be shrunk."""
+    deltas = {"A.SZSE": 10.0}
+    prices = {"A.SZSE": 10.0}
+
+    assert neutral.scale_turnover(deltas, prices, cap=200.0) == deltas
+
+
 def test_neutral_strategy_hedge_defaults():
     """The defaults have to be a hedge and not a bet."""
     strategy = neutral.MarketNeutralStrategy

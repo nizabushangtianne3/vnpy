@@ -37,6 +37,30 @@ from vnpy.trader.object import BarData, TradeData
 from vnpy.alpha.strategy.strategies.rank_band_strategy import buffered_band
 
 
+def scale_turnover(
+    deltas: dict[str, float],
+    prices: dict[str, float],
+    cap: float,
+) -> dict[str, float]:
+    """Scale position changes so their gross notional fits one turnover cap.
+
+    The long and hedge legs share one budget. Applying the cap to one leg
+    while the other resets its target lets the hedge bypass the limit.
+    """
+    gross: float = sum(
+        abs(delta) * prices.get(vt_symbol, 0.0)
+        for vt_symbol, delta in deltas.items()
+    )
+    if gross <= cap or gross <= 0.0:
+        return dict(deltas)
+
+    scale: float = cap / gross
+    return {
+        vt_symbol: delta * scale
+        for vt_symbol, delta in deltas.items()
+    }
+
+
 def hedge_basket(
     bars: dict[str, BarData], count: int, exclude: set[str]
 ) -> list[str]:
@@ -159,7 +183,8 @@ class MarketNeutralStrategy(AlphaStrategy):
 
         cash: float = self.get_cash_available()
 
-        sell_value: float = 0.0
+        long_deltas: dict[str, float] = {}
+        prices: dict[str, float] = {}
         for vt_symbol in sell_symbols:
             if self.holding_days.get(vt_symbol, 0) < self.min_days:
                 continue
@@ -169,20 +194,23 @@ class MarketNeutralStrategy(AlphaStrategy):
             volume: float = self.get_pos(vt_symbol)
             if volume <= 0:
                 continue
-            self.set_target(vt_symbol, target=0)
             turnover: float = bar.close_price * volume
             cost: float = max(turnover * self.close_rate, self.min_commission)
             cash += turnover - cost
-            sell_value += turnover
+            long_deltas[vt_symbol] = -volume
+            prices[vt_symbol] = bar.close_price
 
         book_value: float = self.get_holding_value() + cash
         cap: float = book_value * self.max_turnover_ratio
-        if sell_value > 0:
-            remaining: float = max(cap - sell_value, 0.0)
-        else:
-            remaining = cap
 
         if buyable and cash > 0:
+            remaining: float = max(
+                cap - sum(
+                    abs(delta) * prices.get(vt_symbol, 0.0)
+                    for vt_symbol, delta in long_deltas.items()
+                ),
+                0.0,
+            )
             budget: float = min(
                 cash * self.cash_ratio / len(buyable),
                 remaining / len(buyable),
@@ -193,9 +221,40 @@ class MarketNeutralStrategy(AlphaStrategy):
                     continue
                 volume = self._lots(budget / bar.close_price)
                 if volume > 0:
-                    self.set_target(vt_symbol, volume)
+                    long_deltas[vt_symbol] = volume
+                    prices[vt_symbol] = bar.close_price
 
-        self._rebalance_hedge(hedge_pool, bars, book_value)
+        # The hedge is sized against the book the long legs are becoming,
+        # not the one they are leaving: sizing it off the stale positions
+        # would hedge the previous book and leave the new one exposed.
+        long_value: float = 0.0
+        for vt_symbol, pos in self.pos_data.items():
+            if pos <= 0:
+                continue
+            bar: BarData | None = bars.get(vt_symbol)
+            if bar:
+                long_value += bar.close_price * pos
+        for vt_symbol, delta in long_deltas.items():
+            if delta <= 0:
+                continue
+            bar = bars.get(vt_symbol)
+            if bar:
+                long_value += bar.close_price * delta
+
+        self._rebalance_hedge(
+            hedge_pool,
+            bars,
+            long_value,
+            long_deltas,
+            prices,
+        )
+
+        scaled: dict[str, float] = scale_turnover(long_deltas, prices, cap)
+        for vt_symbol, delta in scaled.items():
+            current: float = self.get_pos(vt_symbol)
+            target: float = current + delta
+            target = self._round_position(target)
+            self.set_target(vt_symbol, target=target)
 
         self.execute_trading(bars, price_add=self.price_add)
 
@@ -214,31 +273,48 @@ class MarketNeutralStrategy(AlphaStrategy):
         return self._cached_hedge_pool
 
     def _rebalance_hedge(
-        self, hedge_pool: list[str], bars: dict[str, BarData], book_value: float
+        self,
+        hedge_pool: list[str],
+        bars: dict[str, BarData],
+        long_value: float,
+        long_deltas: dict[str, float],
+        prices: dict[str, float],
     ) -> None:
-        """Size the short side against the long book and move it to target."""
+        """Add the hedge leg's deltas into one shared turnover budget."""
         if not hedge_pool:
             return
-        long_value: float = 0.0
-        for vt_symbol, pos in self.pos_data.items():
-            if pos <= 0:
-                continue
-            bar: BarData | None = bars.get(vt_symbol)
-            if bar:
-                long_value += bar.close_price * pos
         target_value: float = long_value * self.hedge_ratio
         per_name: float = target_value / len(hedge_pool)
 
+        # The deltas are merged into the long side's budget rather than
+        # scaled here: scaling the hedge on its own and then scaling the
+        # whole book again would shrink it twice and quietly change the
+        # hedge ratio from the one the setting declares.
+        hedge_deltas: dict[str, float] = {}
         for vt_symbol in hedge_pool:
             hedge_bar: BarData | None = bars.get(vt_symbol)
             if not hedge_bar or hedge_bar.close_price <= 0:
                 continue
             shares: float = self._lots(per_name / hedge_bar.close_price)
             if shares > 0:
-                self.set_target(vt_symbol, target=-shares)
+                current: float = self.get_pos(vt_symbol)
+                hedge_deltas[vt_symbol] = -shares - current
+                prices[vt_symbol] = hedge_bar.close_price
+
+        for vt_symbol, delta in hedge_deltas.items():
+            current = self.get_pos(vt_symbol)
+            target = self._round_position(current + delta)
+            long_deltas[vt_symbol] = target - current
 
     def _lots(self, shares: float) -> int:
         """Round a raw share count down to whole board lots."""
-        from vnpy.trader.utility import round_to
+        from vnpy.trader.utility import floor_to
 
-        return int(round_to(shares, self.min_volume))
+        return int(floor_to(shares, self.min_volume))
+
+    def _round_position(self, position: float) -> float:
+        """Round a signed position toward zero to a whole board lot."""
+        magnitude: float = self._lots(abs(position))
+        if position < 0:
+            return -float(magnitude)
+        return float(magnitude)

@@ -231,6 +231,6 @@ class RankBandStrategy(AlphaStrategy):
 
     def _lots(self, shares: float) -> int:
         """Round a raw share count down to whole board lots."""
-        from vnpy.trader.utility import round_to
+        from vnpy.trader.utility import floor_to
 
-        return int(round_to(shares, self.min_volume))
+        return int(floor_to(shares, self.min_volume))
