@@ -1294,9 +1294,27 @@ Two things follow, and the first is the one that answers the goal. The long book
 
 So the position the evidence supports is that the book is currently a market-beta play with a selection overlay, and the selection overlay has not paid for itself on the graded half. The next test is not another ratio sweep. It is the horizon question, because a signal that decays the way this one does is a signal whose holding period is wrong, and the returns quoted in every section above are quoted at a horizon whose own caches were relabelled once and never retrained.
 
+## Retraining at the 10-session horizon makes the signal worse, on both halves
+
+The open question from the last section was whether the horizon was wrong, because every return quoted in this document was measured on a signal whose own cache had been relabelled once and never retrained at the horizon it claimed. There was already a 10-session ensemble cache in sweeps/market3000_size_rolling900_250_h10_ens.parquet. Its overlap with the 5-session cache is only 0.51, the first sign that a different horizon selects a genuinely different signal rather than re-rotating the same one.
+
+That cache was used directly, at the same fee model, on the same split, with the hedge removed. Nothing was refit for these runs; the signal was read as cached:
+
+| signal | fit total% | fit sharpe | graded total% | graded sharpe | fit turnover | graded turnover |
+| --- | --- | --- | --- | --- | --- | --- |
+| 5-session, as cached | 17.58 | 1.93 | -0.30 | -0.00 | 3.44 | 3.17 |
+| 10-session, as cached | 5.89 | 1.04 | -3.56 | -0.47 | 2.80 | 3.10 |
+
+The 10-session signal is worse in both halves, and by a wide margin on the graded half, where it loses 3.56 percent against the 5-session signal's 0.30 percent loss. Its graded loss is 2026 alone, at -3.59M over 208 sessions and a sharpe of -0.59, against the 5-session signal's -1.67M at -0.26 in the same sessions. The 2025 partial-year inside the graded window is roughly flat for both.
+
+This closes the horizon question in the direction nobody wanted: a longer horizon is not the fix. Refitting at the horizon that the slower clock was supposed to suit makes both the fit-half return and the graded-half return worse, and it does so while carrying more net exposure on the graded half, 0.288 against 0.263. The signal's own IC gates agree with it -- 10 sessions reads IC 0.0415 and positive IC 62.4%, both over target, against ICIR 0.385 which is under the 0.5 gate -- but passing the IC gates on a cross-section is not the same as earning money on a clock, and on this book it does not.
+
+So all three fronts this note has left open are now closed, and none of them pays. The ratio does not transfer out of sample and the two halves rank it in opposite directions. The long side earns 17.58 percent on the fit half and loses money on the graded half. The longer horizon loses money faster. What remains is not a parameter to tune. It is the observation, repeated in each of these measurements, that the book's return is the market's return: the graded half's losses are 2026 market beta in every configuration tried, with the net exposure between 0.26 and 0.29 of capital, and the fit half's gains are the same exposure pointed the other way.
+
 ## What is next
 
+The three fronts this note used to carry forward are all closed, and the answers are in. The ratio does not transfer out of sample, and the fit and graded halves rank it in opposite directions, so no single value of it is good in both. The long side earns 17.58 percent on the fit half and loses 0.30 percent on the graded half. Retraining at the 10-session horizon loses money faster on both halves, 5.89 and -3.56 percent against 17.58 and -0.30.
 
-The two items the previous version of this note carried forward are both closed: the sample split has been run and the ratio does not transfer, and the lending fee is modelled and reaches the return. What replaces them is the question the split exposed. The long side has to earn its costs on its own before the shape of the hedge matters, and the graded half says it does not: at the best graded ratio the return is 2.21 percent against 1.57 percent of borrowing and 0.14 percent of commission, and the raw signal collapses in 2026 by market beta rather than by decay.
+What is left is not a parameter. Every configuration measured here loses money on the graded half, and the loss is 2026 in every one of them, with net exposure between a quarter and a third of capital. The book is currently the market with a selection overlay on top, and the overlay has not paid for itself on the graded half in any of the three framings tried.
 
-So the next step is to charge the long side honestly and find out what is left. That means running the book with the hedge removed, at the same fee model, on the same split, so the two legs can be subtracted: if the long side alone beats the hedged book on both halves, the hedge is a cost and not a risk control, and the search moves to the long side. The horizon question also stands, and it is now the more promising of the two, because a horizon that has not been retrained at that horizon cannot claim the return it is being credited with.
+The open empirical question, if this line continues, is the 2026 window itself: whether the graded half is a regime that a signal fitted before it cannot price, or a regime that the signal should have been able to survive. That is a question about the window, not about the book, and it cannot be answered by another sweep on the same data.
