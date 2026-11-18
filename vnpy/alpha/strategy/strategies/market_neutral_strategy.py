@@ -231,9 +231,9 @@ class MarketNeutralStrategy(AlphaStrategy):
         for vt_symbol, pos in self.pos_data.items():
             if pos <= 0:
                 continue
-            bar: BarData | None = bars.get(vt_symbol)
-            if bar:
-                long_value += bar.close_price * pos
+            position_bar: BarData | None = bars.get(vt_symbol)
+            if position_bar:
+                long_value += position_bar.close_price * pos
         for vt_symbol, delta in long_deltas.items():
             if delta <= 0:
                 continue
