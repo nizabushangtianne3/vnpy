@@ -76,6 +76,39 @@ def load_hedge_bars(hedge_symbol: str, start: str, end: str) -> list:
     return bars
 
 
+def stock_rates(
+    commission_rate: float,
+    transfer_fee_rate: float,
+    stamp_tax_rate: float,
+) -> tuple[float, float]:
+    """The buy-side and sell-side cost of one A-share round trip.
+
+    The stamp tax is charged on the transfer of a share, so it lands on the
+    sell side only, and the transfer fee is charged on both sides. The
+    sell side is therefore the buy side plus the stamp tax, and the fee
+    the engine charges has to carry both halves or the hedge's cost is
+    understated by the side that pays it.
+    """
+    buy: float = commission_rate + transfer_fee_rate
+    sell: float = buy + stamp_tax_rate
+    return buy, sell
+
+
+def etf_rates(
+    commission_rate: float,
+    transfer_fee_rate: float,
+) -> tuple[float, float]:
+    """The buy-side and sell-side cost of an ETF round trip.
+
+    An ETF share is not a stock and not a depositary receipt, and the stamp
+    tax is levied on the transfer of a stock, so an ETF leg pays no stamp
+    tax on the sell side. It still pays the transfer fee, which the clearing
+    house charges on every transfer including fund shares.
+    """
+    side: float = commission_rate + transfer_fee_rate
+    return side, side
+
+
 def exposure(engine: BacktestingEngine, capital: float) -> dict:
     """The real exposures the engine's cash book cannot see by itself.
 
@@ -129,8 +162,9 @@ def build_engine(
     rebalance_days: int,
     min_days: int,
     max_turnover_ratio: float,
-    open_rate: float,
-    close_rate: float,
+    buy_rate: float,
+    sell_rate: float,
+    borrow_rate: float,
 ) -> BacktestingEngine:
     """Set up one engine run with the band strategy."""
     engine = BacktestingEngine(lab)
@@ -153,8 +187,8 @@ def build_engine(
             "rebalance_days": rebalance_days,
             "min_days": min_days,
             "max_turnover_ratio": max_turnover_ratio,
-            "open_rate": open_rate,
-            "close_rate": close_rate,
+            "open_rate": buy_rate,
+            "close_rate": sell_rate,
         }
     else:
         strategy_class = RankBandStrategy
@@ -165,14 +199,23 @@ def build_engine(
             "rebalance_days": rebalance_days,
             "min_days": min_days,
             "max_turnover_ratio": max_turnover_ratio,
-            "open_rate": open_rate,
-            "close_rate": close_rate,
+            "open_rate": buy_rate,
+            "close_rate": sell_rate,
         }
     engine.add_strategy(
         strategy_class,
         strategy_setting,
         signal,
     )
+    if borrow_rate > 0:
+        # The lending fee is charged on every symbol the book can go short
+        # in, which is either the named hedge instrument or the liquid
+        # basket. It is charged uniformly on that set rather than on the
+        # names the engine can already see, because a fee only bites on the
+        # days a position is actually short and the daily result layer
+        # applies it per symbol against the sign of the position.
+        shortable: list[str] = [hedge_symbol] if hedge_symbol else list(vt_symbols)
+        engine.set_borrow_rates({vt_symbol: borrow_rate for vt_symbol in shortable})
     engine.load_data()
     engine.run_backtesting()
     engine.calculate_result()
@@ -198,6 +241,9 @@ def summarise(engine: BacktestingEngine, capital: float) -> dict:
         ),
         "commission_fraction": round(
             float(stats["total_commission"]) / capital, 6
+        ),
+        "borrow_fee_fraction": round(
+            float(stats.get("total_borrow_fee", 0.0)) / capital, 6
         ),
         "trades": int(stats["total_trade_count"]),
     }
@@ -271,8 +317,48 @@ def main() -> int:
     parser.add_argument("--rebalance-days", type=int, default=30)
     parser.add_argument("--min-days", type=int, default=5)
     parser.add_argument("--max-turnover-ratio", type=float, default=0.3)
-    parser.add_argument("--open-rate", type=float, default=0.0005)
-    parser.add_argument("--close-rate", type=float, default=0.0015)
+    parser.add_argument(
+        "--commission-rate",
+        type=float,
+        default=0.00025,
+        help="broker commission on both sides",
+    )
+    parser.add_argument(
+        "--transfer-fee-rate",
+        type=float,
+        default=0.00001,
+        help="clearing house transfer fee on both sides",
+    )
+    parser.add_argument(
+        "--stamp-tax-rate",
+        type=float,
+        default=0.0005,
+        help="stamp tax on stock sells; ETFs pay none",
+    )
+    parser.add_argument(
+        "--etf-commission-rate",
+        type=float,
+        default=0.00015,
+        help="broker commission on an ETF leg, often discounted",
+    )
+    parser.add_argument(
+        "--borrow-rate",
+        type=float,
+        default=0.0,
+        help="annualised securities lending fee on the short leg",
+    )
+    parser.add_argument(
+        "--open-rate",
+        type=float,
+        default=0.0,
+        help="override the buy-side rate; 0 uses the modelled fees",
+    )
+    parser.add_argument(
+        "--close-rate",
+        type=float,
+        default=0.0,
+        help="override the sell-side rate; 0 uses the modelled fees",
+    )
     parser.add_argument(
         "--sweep",
         action="store_true",
@@ -288,6 +374,26 @@ def main() -> int:
     if args.hedge_symbol and args.hedge_symbol not in vt_symbols:
         vt_symbols.append(args.hedge_symbol)
     lab = AlphaLab(args.lab)
+    # A stock and an ETF pay different fees, and the difference is not a
+    # detail: the stamp tax is charged on the transfer of a share, so an ETF
+    # leg never pays it while a stock leg pays it on every sell.
+    stock_buy, stock_sell = stock_rates(
+        args.commission_rate,
+        args.transfer_fee_rate,
+        args.stamp_tax_rate,
+    )
+    if args.open_rate > 0 or args.close_rate > 0:
+        stock_buy = args.open_rate if args.open_rate > 0 else stock_buy
+        stock_sell = args.close_rate if args.close_rate > 0 else stock_sell
+    etf_buy, etf_sell = etf_rates(
+        args.etf_commission_rate,
+        args.transfer_fee_rate,
+    )
+    if args.open_rate > 0:
+        etf_buy = args.open_rate
+    if args.close_rate > 0:
+        etf_sell = args.close_rate
+
     # The engine charges the commission from the lab's contract settings, so
     # the cost sensitivity has to be written there and not only into the
     # strategy's own budget arithmetic.
@@ -296,16 +402,16 @@ def main() -> int:
             continue
         lab.add_contract_setting(
             vt_symbol=vt_symbol,
-            long_rate=args.open_rate,
-            short_rate=args.close_rate,
+            long_rate=stock_buy,
+            short_rate=stock_sell,
             size=1.0,
             pricetick=0.01,
         )
     if args.hedge_symbol:
         lab.add_contract_setting(
             vt_symbol=args.hedge_symbol,
-            long_rate=args.open_rate,
-            short_rate=args.close_rate,
+            long_rate=etf_buy,
+            short_rate=etf_sell,
             size=1.0,
             pricetick=0.01,
         )
@@ -351,8 +457,9 @@ def main() -> int:
             args.rebalance_days,
             args.min_days,
             args.max_turnover_ratio,
-            args.open_rate,
-            args.close_rate,
+            stock_buy,
+            stock_sell,
+            args.borrow_rate,
         )
         summary = summarise(engine, args.capital)
         by_year = yearly(engine)

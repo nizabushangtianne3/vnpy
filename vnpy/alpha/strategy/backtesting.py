@@ -38,6 +38,7 @@ class BacktestingEngine:
 
         self.long_rates: dict[str, float] = {}
         self.short_rates: dict[str, float] = {}
+        self.borrow_rates: dict[str, float] = {}
         self.sizes: dict[str, float] = {}
         self.priceticks: dict[str, float] = {}
 
@@ -119,6 +120,16 @@ class BacktestingEngine:
             self.short_rates[vt_symbol] = setting["short_rate"]
             self.sizes[vt_symbol] = setting["size"]
             self.priceticks[vt_symbol] = setting["pricetick"]
+
+    def set_borrow_rates(self, borrow_rates: dict[str, float]) -> None:
+        """Set the annualised securities lending fee for each shortable symbol.
+
+        The fee is charged on the market value of the borrowed position for
+        every calendar day it is held, so it has to be carried alongside the
+        trade rates rather than folded into them: a trade rate is paid once
+        per fill and a lending fee is paid once per day.
+        """
+        self.borrow_rates = dict(borrow_rates)
 
     def add_strategy(self, strategy_class: type, setting: dict, signal_df: pl.DataFrame) -> None:
         """Add strategy"""
@@ -215,7 +226,8 @@ class BacktestingEngine:
                 start_poses,
                 self.sizes,
                 self.long_rates,
-                self.short_rates
+                self.short_rates,
+                self.borrow_rates,
             )
 
             pre_closes = daily_result.close_prices
@@ -226,7 +238,7 @@ class BacktestingEngine:
         for daily_result in self.daily_results.values():
             fields: list = [
                 "date", "trade_count", "turnover",
-                "commission", "trading_pnl",
+                "commission", "borrow_fee", "trading_pnl",
                 "holding_pnl", "total_pnl", "net_pnl"
             ]
             key: str
@@ -240,6 +252,7 @@ class BacktestingEngine:
                 pl.Series("trade_count", results["trade_count"], dtype=pl.Int64),
                 pl.Series("turnover", results["turnover"], dtype=pl.Float64),
                 pl.Series("commission", results["commission"], dtype=pl.Float64),
+                pl.Series("borrow_fee", results["borrow_fee"], dtype=pl.Float64),
                 pl.Series("trading_pnl", results["trading_pnl"], dtype=pl.Float64),
                 pl.Series("holding_pnl", results["holding_pnl"], dtype=pl.Float64),
                 pl.Series("total_pnl", results["total_pnl"], dtype=pl.Float64),
@@ -267,6 +280,8 @@ class BacktestingEngine:
         daily_net_pnl: float = 0
         total_commission: float = 0
         daily_commission: float = 0
+        total_borrow_fee: float = 0
+        daily_borrow_fee: float = 0
         total_turnover: float = 0
         daily_turnover: float = 0
         total_trade_count: int = 0
@@ -337,6 +352,9 @@ class BacktestingEngine:
             total_commission = cast(float, df["commission"].sum())
             daily_commission = total_commission / total_days
 
+            total_borrow_fee = cast(float, df["borrow_fee"].sum())
+            daily_borrow_fee = total_borrow_fee / total_days
+
             total_turnover = cast(float, df["turnover"].sum())
             daily_turnover = total_turnover / total_days
 
@@ -376,11 +394,13 @@ class BacktestingEngine:
 
         logger.info(f"总盈亏：  {total_net_pnl:,.2f}")
         logger.info(f"总手续费：  {total_commission:,.2f}")
+        logger.info(f"总借券费：  {total_borrow_fee:,.2f}")
         logger.info(f"总成交金额：  {total_turnover:,.2f}")
         logger.info(f"总成交笔数：  {total_trade_count}")
 
         logger.info(f"日均盈亏：  {daily_net_pnl:,.2f}")
         logger.info(f"日均手续费：  {daily_commission:,.2f}")
+        logger.info(f"日均借券费：  {daily_borrow_fee:,.2f}")
         logger.info(f"日均成交金额：  {daily_turnover:,.2f}")
         logger.info(f"日均成交笔数：  {daily_trade_count}")
 
@@ -404,6 +424,8 @@ class BacktestingEngine:
             "daily_net_pnl": daily_net_pnl,
             "total_commission": total_commission,
             "daily_commission": daily_commission,
+            "total_borrow_fee": total_borrow_fee,
+            "daily_borrow_fee": daily_borrow_fee,
             "total_turnover": total_turnover,
             "daily_turnover": daily_turnover,
             "total_trade_count": total_trade_count,
@@ -936,6 +958,7 @@ class PortfolioDailyResult:
         self.trade_count: int = 0
         self.turnover: float = 0
         self.commission: float = 0
+        self.borrow_fee: float = 0
         self.trading_pnl: float = 0
         self.holding_pnl: float = 0
         self.total_pnl: float = 0
@@ -952,7 +975,8 @@ class PortfolioDailyResult:
         start_poses: dict[str, float],
         sizes: dict[str, float],
         long_rates: dict[str, float],
-        short_rates: dict[str, float]
+        short_rates: dict[str, float],
+        borrow_rates: dict[str, float] | None = None,
     ) -> None:
         """Calculate profit and loss"""
         self.pre_closes = pre_closes
@@ -978,6 +1002,39 @@ class PortfolioDailyResult:
             self.net_pnl += contract_result.net_pnl
 
             self.end_poses[vt_symbol] = contract_result.end_pos
+
+        self.net_pnl -= self.charge_borrow_fee(start_poses, sizes, borrow_rates)
+
+    def charge_borrow_fee(
+        self,
+        start_poses: dict[str, float],
+        sizes: dict[str, float],
+        borrow_rates: dict[str, float] | None = None,
+    ) -> float:
+        """The lending fee a short book pays for every calendar day it is short.
+
+        Securities lending is charged on the market value of the borrowed
+        stock for the days it is held, so it lands on every session rather
+        than on the trades that opened and closed the position. A fee that
+        only appears on the trades would understate the cost of a hedge by
+        the length of the hedge.
+        """
+        if not borrow_rates:
+            return 0.0
+
+        fee: float = 0.0
+        for vt_symbol, position in start_poses.items():
+            rate: float = borrow_rates.get(vt_symbol, 0.0)
+            if not rate or position >= 0:
+                continue
+            close_price: float = self.close_prices.get(vt_symbol, 0.0)
+            if close_price <= 0:
+                continue
+            market_value: float = abs(position) * close_price * sizes.get(vt_symbol, 1.0)
+            fee += market_value * rate / 360.0
+
+        self.borrow_fee += fee
+        return fee
 
     def update_close_prices(self, close_prices: dict[str, float]) -> None:
         """Update daily close prices"""

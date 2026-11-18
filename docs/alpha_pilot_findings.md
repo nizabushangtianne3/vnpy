@@ -1238,6 +1238,65 @@ All four rows still clear the fee gate, at 0.67 to 0.69 percent against capital,
 
 The engine's equity figure has to be audited alongside these numbers. It subtracts a short position's market value as if selling it released cash the account may spend, which is true for a closed trade and false for a security the book still owes. The `net` and `gross` columns above are printed by the runner for exactly that reason, and a book whose net looks small while its gross is more than half its capital is a leveraged book whatever the equity curve says.
 
+## The lending fee is now charged, and it costs about a point of return a year
+
+Two costs were missing from the numbers above, and both were on the leg the deployment argument rests on.
+
+The first is securities lending. A short ETF is borrowed stock, and the fee is charged on the market value of the borrowed position for every calendar day it is held, so it lands on every session rather than on the trades that opened and closed it. Charging it on the trades alone would understate the cost of a hedge by the length of the hedge. `PortfolioDailyResult` now applies it against the sign of each start position, once per session, and subtracts it from `net_pnl`, which is what the balance curve accumulates -- so it reaches the reported return rather than sitting in a printed column.
+
+The second is that the two legs do not pay the same fees. The stamp tax is levied on the transfer of a share, so an ETF leg never pays it while a stock leg pays it on every sell. The transfer fee is charged on every transfer including fund shares, so both legs pay it. The runner now models the buy side and the sell side per instrument -- `stock_rates` as commission plus transfer fee, plus the stamp tax on the sell, and `etf_rates` as commission plus transfer fee on both sides -- and writes them into the lab's contract settings, because the engine charges the commission from there and not from the strategy's own budget arithmetic.
+
+One unadjusted ETF leg at ratio 0.6, 515 sessions, everything else at the settings that passed the gates. The two runs differ only in the lending rate, so the difference is attributable:
+
+| run | total% | annual% | sharpe | max DD% | commission% | borrow fee% | hedge trades |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| no lending fee | 14.9132 | 6.95 | 1.23 | -5.97 | 0.3289 | 0 | 18 |
+| 8% annualised lending | 12.6731 | 5.91 | 1.05 | -6.24 | 0.3289 | 2.2401 | 18 |
+
+The commission column is untouched between the two runs, which is the check that the fee model refactor did not move anything else. The lending fee at 8 percent annualised costs 2.24 percent of capital over 515 sessions, about 1.66 percent a year, and it takes the return from 14.91 to 12.67 percent. The return survives it and the sharpe survives it, at 1.05.
+
+This is the shape that matters for the goal: the hedge leg's real cost is not the 0.33 percent of commission, it is the 2.24 percent of borrowing, and the two are of different kinds. The commission is a one-off per fill and the lending fee is a running cost that grows with the holding period. A strategy that holds the hedge longer pays more of it per unit of turnover, which is the opposite of the turnover-cap story the fee gate was built around.
+
+## The hedge ratio does not transfer out of sample, and the direction of the error is known
+
+The sweep that said 0.5 to 0.6 was optimal was fitted to the window it was measured on, so the sample was split and the ratio re-measured on the first half before being graded on the second. Fit window 2024-09-26 to 2025-09-30, grading window 2025-10-01 to 2026-11-13, one unadjusted ETF leg, 8 percent annualised lending, everything else unchanged:
+
+| hedge_ratio | fit total% | fit sharpe | graded total% | graded sharpe | fit net_x | graded net_x |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.2 | 13.60 | 1.83 | 0.62 | 0.12 | 0.288 | 0.204 |
+| 0.3 | 12.54 | 1.85 | 0.90 | 0.17 | 0.262 | 0.175 |
+| 0.4 | 11.02 | 1.76 | 1.07 | 0.20 | 0.222 | 0.150 |
+| 0.5 | 9.56 | 1.65 | 1.15 | 0.21 | 0.181 | 0.125 |
+| 0.6 | 8.40 | 1.54 | 1.06 | 0.20 | 0.141 | 0.097 |
+| 0.8 | 6.21 | 1.24 | 1.18 | 0.23 | 0.061 | 0.048 |
+| 1.0 | 3.81 | 0.81 | 2.21 | 0.41 | -0.016 | -0.004 |
+
+The ordering reverses. On the fitted half, return falls monotonically from 13.60 percent at 0.2 to 3.81 percent at 1.0, and the sharpe peaks at 0.3. On the graded half, return rises monotonically from 0.62 percent at 0.2 to 2.21 percent at 1.0, and the sharpe again peaks at the opposite end from the fit, at 1.0. Whatever the fitted sweep measured, it is not a property of the book that survives a second half of the sample.
+
+Two readings are available and they are not the same claim. The first is that the fit half simply had a stronger market: the graded half's returns collapse by a factor of six to ten even at the ratio the fit half rated worst, so most of the drop is the window and not the ratio. The second is the one that costs money: because the two halves rank the ratio in opposite directions, the ratio cannot be carried from one to the other at all. There is no value of it that is good in both. This is stronger than "the estimate is noisy", because noise would flatten the ordering rather than invert it.
+
+The graded numbers are not a viable book either. The best graded run returns 2.21 percent over 268 sessions with a sharpe of 0.41, against a lending fee of 1.57 percent of capital and a commission of 0.14 percent. The two legs are eating most of what the selection earns, and the exposure audit says the same thing in another currency: net exposure never gets away from 20 percent at 0.2 and never quite reaches zero at 1.0, so the book is carrying market exposure it is paying to carry.
+
+So the honest state of the hedge leg is that it is deployable in the mechanical sense -- 18 fills against a borrowable instrument -- and unprofitable in the graded sense. The question this leaves is not which ratio to use, it is whether the long side's own return survives the costs once the market's contribution is removed honestly, and the last section already said it does not on the raw signal.
+
+## The long side charges 3.94 percent of capital for a negative out-of-sample return
+
+The hedge cannot be judged while the long leg is still uncharged, so the book was run with the hedge removed, on the same split, at the same fee model, with the same 8 percent annualised lending rate available. `hedge_ratio 0` also removes the short leg, so the lending fee column is zero by construction -- which is the check that the fee is charged only on positions that are actually short:
+
+| window | sessions | total% | sharpe | max DD% | commission% | borrow fee% | net_x | gross_x |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fit, 2024-09-26 to 2025-09-30 | 247 | 17.5838 | 1.93 | -4.68 | 0.1699 | 0 | 0.400 | 0.400 |
+| graded, 2025-10-01 to 2026-11-13 | 268 | -0.2974 | -0.00 | -7.57 | 0.1550 | 0 | 0.263 | 0.263 |
+
+The fit half returns 17.58 percent, which is the best number this strategy has produced anywhere, and the graded half loses money. The gap is not the fee model: the graded half pays 0.1550 percent of commission against the fit half's 0.1699 percent, so it is cheaper to run and still loses. The graded half's loss is concentrated entirely in 2026, which is -1.67M over 208 sessions at a sharpe of -0.26, while the 60 sessions of October to December 2025 that fall in the same window are +1.37M at a sharpe of 1.07. The signal did not break in 2026; the market's 2026 return did, and the book carried roughly 0.26 of capital of net exposure into it.
+
+Two things follow, and the first is the one that answers the goal. The long book's best number, 17.58 percent, is a fit-half number, and the honest number for the same book is -0.30 percent. Any claim built on the sweep tables in the sections above is a claim built on the fit half. Second, the hedge leg cannot be blamed for the graded outcome: removing it entirely does not rescue the graded half, it turns 2.21 percent at ratio 1.0 into -0.30 percent at ratio 0. The hedge was doing the only thing left for it to do, which is damp the drawdown from 7.57 to 3.72 percent, and the price of that insurance is the borrowing fee.
+
+So the position the evidence supports is that the book is currently a market-beta play with a selection overlay, and the selection overlay has not paid for itself on the graded half. The next test is not another ratio sweep. It is the horizon question, because a signal that decays the way this one does is a signal whose holding period is wrong, and the returns quoted in every section above are quoted at a horizon whose own caches were relabelled once and never retrained.
+
 ## What is next
 
-The beta that the sweep measured is fitted to this window, so the next step is to split the sample, fit the ratio on the first half and grade it on the second, rather than carry 0.6 forward. The borrow cost of the ETF leg is also unmodelled: a securities-lending fee on the short ETF would land on every session, not every trade, and at these returns it is large enough to matter. The signal's own horizon is the other open front, because the 10-session and 15-session caches were relabelled once and are now stale under the rule that a horizon is not a horizon until it has been retrained at that horizon.
+
+The two items the previous version of this note carried forward are both closed: the sample split has been run and the ratio does not transfer, and the lending fee is modelled and reaches the return. What replaces them is the question the split exposed. The long side has to earn its costs on its own before the shape of the hedge matters, and the graded half says it does not: at the best graded ratio the return is 2.21 percent against 1.57 percent of borrowing and 0.14 percent of commission, and the raw signal collapses in 2026 by market beta rather than by decay.
+
+So the next step is to charge the long side honestly and find out what is left. That means running the book with the hedge removed, at the same fee model, on the same split, so the two legs can be subtracted: if the long side alone beats the hedged book on both halves, the hedge is a cost and not a risk control, and the search moves to the long side. The horizon question also stands, and it is now the more promising of the two, because a horizon that has not been retrained at that horizon cannot claim the return it is being credited with.
