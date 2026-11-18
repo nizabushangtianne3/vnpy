@@ -1216,3 +1216,28 @@ and an equity's price is no longer rescaled by the integer shape of its
 bar, which would have divided a 1685 yuan stock by ten. The path from a
 signal to a paper fill has one less break in it; it has not yet been
 run end to end.
+
+## The stock basket hedge was never deployable, and the ETF leg needed a hedge ratio the setting did not carry
+
+The short leg was thirty individual A-shares. Shorting a basket of single names needs borrowed securities that are hard to borrow and expensive when they exist at all, so the numbers that cleared the fee gate were numbers on a book no account could open. The index-future route was tried first and closed: ten Eastmoney secid shapes were tested against the kline endpoint and none of them returned data. The ETF route works. `510300.SSE` has 1423 daily bars from 2021-01-04 to 2026-11-18 on the same public host, and `fqt=0` returns them unadjusted, which is what a tradable leg has to be priced on.
+
+Three things had to be true before an ETF leg could trade at all. The hedge basket now honours one named instrument, `hedge_symbol`, over the default basket. The hedge is sized against `projected_long_value`, the book the long legs are becoming rather than the one they are leaving, because sizing off stale positions hedges the previous book and leaves the new one exposed. And the kline parser leaves the instrument blank for its caller to name, so the loader stamps `symbol`, `exchange` and `vt_symbol` onto every bar -- `vt_symbol` is a snapshot taken when the dataclass was built, so rewriting `symbol` alone leaves the leg answering to a blank name and the engine loads a bar file the strategy never asks for.
+
+One unadjusted ETF leg, `hedge_ratio` swept, everything else at the settings that passed the gates above, 515 sessions from 2024-10-08:
+
+| hedge_ratio | total% | annual% | sharpe | max DD% | net | gross | fee% | trades |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.6 | 14.61 | 6.81 | 1.21 | -5.99 | 0.140 | 0.534 | 0.691 | 6463 |
+| 0.8 | 13.70 | 6.38 | 1.18 | -5.92 | 0.072 | 0.587 | 0.686 | 6453 |
+| 1.0 | 12.16 | 5.67 | 1.07 | -5.88 | 0.007 | 0.637 | 0.679 | 6513 |
+| 1.2 | 10.84 | 5.05 | 0.92 | -5.81 | -0.054 | 0.681 | 0.674 | 6559 |
+
+Return falls monotonically as the ratio rises, and the net exposure the table prints moves from 14 percent of capital at 0.6 to a short 5 percent at 1.2. The long book's beta is therefore well under one, and a fully hedged book over-hedges: the sweep is measuring how much market exposure the book wants, not whether the hedge works. The honest reading is that a beta of roughly 0.5 is optimal on this window, and that number is fitted to the sample rather than estimated from an instrument, so it is the first thing that has to be re-derived out of sample before any of it is traded.
+
+All four rows still clear the fee gate, at 0.67 to 0.69 percent against capital, because an ETF leg rebalances in 18 trades where thirty single names rebalanced in thousands. That is the deployment argument for the ETF leg independent of its return: 18 fills against a borrowable instrument against 3000-odd fills against names that may not be borrowable at all.
+
+The engine's equity figure has to be audited alongside these numbers. It subtracts a short position's market value as if selling it released cash the account may spend, which is true for a closed trade and false for a security the book still owes. The `net` and `gross` columns above are printed by the runner for exactly that reason, and a book whose net looks small while its gross is more than half its capital is a leveraged book whatever the equity curve says.
+
+## What is next
+
+The beta that the sweep measured is fitted to this window, so the next step is to split the sample, fit the ratio on the first half and grade it on the second, rather than carry 0.6 forward. The borrow cost of the ETF leg is also unmodelled: a securities-lending fee on the short ETF would land on every session, not every trade, and at these returns it is large enough to matter. The signal's own horizon is the other open front, because the 10-session and 15-session caches were relabelled once and are now stale under the rule that a horizon is not a horizon until it has been retrained at that horizon.
