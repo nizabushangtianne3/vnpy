@@ -1804,6 +1804,39 @@ produces a long-short book whose return a t test cannot separate from zero. The
 ranking survives as a ranking; it has now failed as a book in three separate
 scoring regimes and on four calendar years.
 
+Two details of that table matter more than its t statistics. Splitting the
+2022-2024 book by leg, compounded on one-session closes:
+
+| window | band | long% | short% | long-short% |
+| --- | --- | --- | --- | --- |
+| 2022-2024 | top/bottom 5% | +37.72 | -24.01 | +81.24 |
+| 2022-2024 | top/bottom 10% | +31.45 | -16.14 | +56.75 |
+| 2025-2026 | top/bottom 5% | +39.03 | +15.39 | +20.49 |
+| 2025-2026 | top/bottom 10% | +26.92 | +18.43 | +7.17 |
+
+On the window the model never saw, unlike the graded half measured earlier,
+both legs push the same way: the long basket rises while the short basket
+falls, so the 81 percent spread is not one leg's market direction dressed up as
+selection. On 2025-2026 both legs are positive and the spread is small, which is
+the regime the earlier note identified.
+
+Trimming the five largest and five smallest days, which is the test for whether
+a single session is producing the mean:
+
+| window | band | n | trimmed daily% | t | p | biggest 5 days as share of \|total\| |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2022-2024 | top/bottom 5% | 704 | +0.0788 | 1.65 | 0.099 | 6.3% |
+| 2022-2024 | top/bottom 10% | 704 | +0.0609 | 1.73 | 0.083 | 5.6% |
+| 2025-2026 | top/bottom 5% | 440 | +0.0514 | 1.12 | 0.261 | 7.0% |
+| 2025-2026 | top/bottom 10% | 440 | +0.0210 | 0.62 | 0.533 | 7.3% |
+
+Removing the extremes raises the t statistic rather than lowering it, and the
+five biggest days are about six percent of the absolute total, so the 2022-2024
+reading is a broad slow drift and not one lucky session. It still does not
+reach a two-tailed p below 0.05, and the honest statement is unchanged: the
+right direction, both legs agreeing, no extreme-day dependence, and a
+magnitude this sample cannot yet certify.
+
 The 2022-2024 window is the one to remember, because it is the only one where
 the model that produced the signal had not yet touched the data it was scoring,
 and it is also the one where the book looks best (t = 1.42 daily, t = 1.69 on

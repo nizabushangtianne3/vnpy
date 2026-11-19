@@ -154,6 +154,29 @@ def main() -> int:
     joined = signal.join(bars, on=["datetime", "vt_symbol"], how="inner")
     print("join:", joined.height, flush=True)
 
+    print("稳健性：剔除最大正/负日后的逐日扩散")
+    for name, start, end in [
+        ("2022-2024", "2022-01-20", "2024-12-31"),
+        ("2025-2026", "2025-01-02", "2026-11-13"),
+    ]:
+        for long_rate, short_rate in [(0.05, 0.05), (0.10, 0.10)]:
+            sample = spread_days(joined, start, end, long_rate, short_rate, 0.10, 30)
+            if len(sample) < 30:
+                continue
+            order = np.sort(sample)
+            trimmed = order[5:-5]
+            mean, t, p = grade(trimmed)
+            biggest = order[-5:]
+            smallest = order[:5]
+            share = float(np.abs(biggest).sum() / np.abs(sample).sum())
+            print(
+                f"{name} L{int(long_rate * 100)}/S{int(short_rate * 100)}    "
+                f"n={len(trimmed):4d} 去极值日均% {mean * 100:8.4f} t={t:6.2f} p={p:6.3f} | "
+                f"最大5日占|总| {share * 100:5.1f}%  最大 {biggest[-1] * 100:+.3f}%  最小 {smallest[0] * 100:+.3f}%",
+                flush=True,
+            )
+    print(flush=True)
+
     windows = [
         ("2022 全年      ", "2022-01-20", "2022-12-30"),
         ("2023 全年      ", "2023-01-01", "2023-12-29"),
