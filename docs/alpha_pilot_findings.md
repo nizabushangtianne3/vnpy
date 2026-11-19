@@ -1712,6 +1712,106 @@ content, at this band, this clock and this universe, has not been shown to
 exist, and that every positive number earlier in this note was the market's
 direction hiding in a comparison.
 
+## A second out-of-sample window was found, and the long-short book still does not survive it
+
+The previous section closed by asking for one of two things: a window the model
+has never seen, or a signal built differently from the 158-factor fit. The first
+one is reachable, because the scoring window was never a property of the data,
+it was a property of the train window. ``predict_rolling`` starts its first
+block at ``train_window + horizon`` sessions, so a 900-session window could not
+score before 2024-09-26 and a 250-session window starts scoring at 2022-01-20.
+The dataset's cached ``data_periods`` say the model that produced these signals
+was fitted on 2021-11 through 2023-06, so a signal scored from 2022-01-20 is
+out of sample with respect to the fit, which is the window the note could not
+reach before.
+
+| train window | sessions | IC mean | ICIR | IC positive | IC by year |
+| --- | --- | --- | --- | --- | --- |
+| 900 (previous) | 479 | 0.0436 | 0.349 | 0.633 | 2024 +0.1488 / 2025 +0.0005 / 2026 +0.0699 |
+| 500 | 901 | 0.0305 | 0.270 | 0.639 | 2023 +0.0360 / 2024 +0.0520 / 2025 +0.0176 / 2026 +0.0133 |
+| 250 | 1151 | 0.0275 | 0.276 | 0.629 | 2022 +0.0349 / 2023 +0.0299 / 2024 +0.0354 / 2025 +0.0112 / 2026 +0.0264 |
+
+The ranking keeps ranking across all five years on the 250-session window, which
+is the first time this note has seen a positive rank IC in 2022 and 2023 for this
+signal. The IC mean is lower than the 900-window reading for the overlapping
+period, which is the cost of a shorter training window, and that is expected.
+None of this is new evidence of an edge; it is evidence the edge, such as it is,
+is not a 2024 artefact.
+
+The long-short book on the 250-session window, same one-session closes, same
+30-session clock, same buffer, equal weighted on both legs:
+
+| window | legs | n | daily% | t | p |
+| --- | --- | --- | --- | --- | --- |
+| 2022 | top 5% / bottom 5% | 230 | +0.0318 | 0.56 | 0.572 |
+| 2022 | top 5% / bottom 10% | 230 | +0.0158 | 0.33 | 0.741 |
+| 2022 | top 10% / bottom 10% | 230 | +0.0463 | 0.97 | 0.333 |
+| 2023 | top 5% / bottom 5% | 242 | +0.0080 | 0.16 | 0.873 |
+| 2023 | top 10% / bottom 10% | 242 | -0.0019 | -0.05 | 0.964 |
+| 2024 | top 5% / bottom 5% | 242 | -0.0391 | -0.31 | 0.760 |
+| 2024 | top 10% / bottom 10% | 242 | -0.0449 | -0.49 | 0.622 |
+| 2022-2024 | top 5% / bottom 5% | 714 | +0.0848 | 1.42 | 0.156 |
+| 2022-2024 | top 5% / bottom 10% | 714 | +0.0747 | 1.39 | 0.165 |
+| 2022-2024 | top 10% / bottom 10% | 714 | +0.0637 | 1.48 | 0.280 |
+| 2025 | top 5% / bottom 5% | 243 | +0.1205 | 1.24 | 0.216 |
+| 2025 | top 10% / bottom 10% | 243 | +0.0630 | 0.85 | 0.395 |
+| 2026 | top 5% / bottom 5% | 207 | -0.0151 | -0.22 | 0.824 |
+| 2026 | top 10% / bottom 10% | 207 | +0.0043 | 0.08 | 0.933 |
+| full 2022-2026 | top 5% / bottom 5% | 1164 | +0.0155 | 0.37 | 0.712 |
+| full 2022-2026 | top 10% / bottom 10% | 1164 | +0.0112 | 0.36 | 0.720 |
+
+Not one row reaches a two-tailed p below 0.05. The three-year 2022-2024 window,
+which is the one the model was never fitted on, is the best of them at t = 1.42
+and p = 0.156, and it is best in the direction the signal predicts, but a t of
+1.4 on 714 observations is not a result.
+
+Two more tests were run rather than one, because a single window can be unlucky
+and because a rebalance clock of thirty sessions makes neighbouring daily
+spreads share part of their cause. Summing each disjoint block of five sessions
+into one observation:
+
+| window | legs | blocks | block% | t | p |
+| --- | --- | --- | --- | --- | --- |
+| 2022-2024 | top 5% / bottom 5% | 142 | +0.4267 | 1.64 | 0.101 |
+| 2022-2024 | top 5% / bottom 10% | 142 | +0.3802 | 1.64 | 0.101 |
+| 2022-2024 | top 10% / bottom 10% | 142 | +0.3191 | 1.69 | 0.091 |
+| 2025-2026 | top 5% / bottom 5% | 90 | +0.2345 | 0.99 | 0.321 |
+| 2025-2026 | top 10% / bottom 10% | 90 | +0.0992 | 0.58 | 0.560 |
+| full 2022-2026 | top 5% / bottom 5% | 232 | +0.0668 | 0.35 | 0.726 |
+| full 2022-2026 | top 10% / bottom 10% | 232 | +0.0495 | 0.34 | 0.734 |
+
+The five-session blocks raise the t statistics a little and not enough: the best
+is still t = 1.69, p = 0.091, on the same 2022-2024 window. The second
+out-of-sample window answers the previous section's question in the negative on
+both units of observation.
+
+The 500-session window was run as a robustness check against the reading being
+an artefact of a particular window length, and it agrees:
+
+| window | legs | n | daily% | t | p |
+| --- | --- | --- | --- | --- | --- |
+| 2023 | top 5% / bottom 5% | 222 | +0.0501 | 0.79 | 0.432 |
+| 2024 | top 5% / bottom 5% | 242 | +0.0106 | 0.10 | 0.924 |
+| 2025 | top 5% / bottom 5% | 243 | +0.0625 | 0.68 | 0.498 |
+| 2026 | top 5% / bottom 5% | 207 | -0.0967 | -1.13 | 0.259 |
+| full | top 5% / bottom 5% | 914 | +0.0202 | 0.51 | 0.611 |
+| full | top 10% / bottom 10% | 914 | +0.0245 | 0.77 | 0.440 |
+
+So the finding is not that this signal stopped working. It is that this signal,
+at every train window length now available on this dataset, across every
+calendar year from 2022 to 2026, on daily spreads and on five-session blocks,
+produces a long-short book whose return a t test cannot separate from zero. The
+ranking survives as a ranking; it has now failed as a book in three separate
+scoring regimes and on four calendar years.
+
+The 2022-2024 window is the one to remember, because it is the only one where
+the model that produced the signal had not yet touched the data it was scoring,
+and it is also the one where the book looks best (t = 1.42 daily, t = 1.69 on
+blocks) while still failing. A direction that is right and a magnitude that is
+not yet measurable is what a research result looks like before it has an
+implementation, and the implementation would need a signal whose construction
+differs from the one measured here.
+
 ## Where this leaves the signal
 
 The three knobs that have been swept all flip sign between the halves: the
@@ -1731,13 +1831,13 @@ than alphas; and a market-neutral long-short whose return is not
 distinguishable from zero. The first is a research finding. The other three
 are reasons the research has not produced a book.
 
-What would change that is not another sweep. It is either a second
-out-of-sample window that the model has never seen, which the cached bars
-cannot supply because the model was fitted on everything in them, or a signal
-whose construction differs from the 158-factor fit that produced this one,
-which is new work rather than a new setting. Both are outside what a sweep can
-reach, and the second of the two is where the time should go if the goal is a
-book that pays.
+What would change that is not another sweep. The second out-of-sample window
+has now been supplied by shortening the train window to 250 sessions, and the
+long-short book fails it on daily spreads (best t = 1.42) and on five-session
+blocks (best t = 1.69), with the 500-session window agreeing. What remains
+untried is the other option: a signal whose construction differs from the
+158-factor fit that produced this one. That is new work rather than a new
+setting, and it is where the time should go if the goal is a book that pays.
 
 Three facts remain outside the repository and still gate deployment on top of
 all of the above: a quoted lending rate, the shortability of the actual
