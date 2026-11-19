@@ -1600,8 +1600,8 @@ On both halves the excess comes from the lower half by volatility. On the fit ha
 
 That is the first split in this note that is positive on both halves at the same time, and it is the reason to say the signal is not merely a down-market exposure. The down-market reading above is still true and still important: a book graded against a universe that fell inherits some of that fall, and the graded half's +6.00 is measured against a universe that lost 8.83 percent. But a split that survives the fit half, where the same machinery failed, is evidence about the signal rather than about the year.
 
-## What is next
-The work this defines is a re-run with the universe itself stratified, which
+## The volatility split, read both ways, and why only one of them looked good
+The work this defines was a re-run with the universe itself stratified, which
 is a setting rather than a discovery. That run has now been done and it gives
 a different answer depending on how the stratification is done, so both forms
 are recorded rather than the one that looked better.
@@ -1633,21 +1633,69 @@ cross-section, and re-making it inside the quiet half makes it worse, which
 says that volatility and the signal interact rather than that one selects on
 the other.
 
+## Weighting inside the book by volatility flips its sign between the halves, and so does the low/high split itself
+
+The sizing question was the one left open, and it is answered badly. Holding
+the same band and re-weighting inside it by trailing 20-session volatility
+moves both halves, and in opposite directions:
+
+| weighting | fit book% | fit excess% | graded book% | graded excess% |
+| --- | --- | --- | --- | --- |
+| equal weight | +73.34 | -2.20 | -3.53 | +6.00 |
+| inverse volatility | +67.35 | -6.24 | +0.50 | +9.96 |
+| inverse volatility squared | +59.40 | -11.27 | +2.81 | +12.05 |
+
+The volatility group split is worse, and the reason is that it is not a
+description of where the signal pays but a trade with the other sign:
+
+| membership | fit book% | fit excess% | graded book% | graded excess% |
+| --- | --- | --- | --- | --- |
+| the whole band | +73.34 | -2.20 | -3.53 | +6.00 |
+| band members at or below the median volatility | +58.34 | -11.89 | +2.89 | +12.11 |
+| band members above the median volatility | +88.99 | +8.11 | -10.26 | -0.55 |
+
+The quiet half earns -11.89 on the fit half and +12.11 on the graded half;
+the volatile half earns +8.11 and -0.55. Each is good on exactly one half and
+the halves are not the same, so this is the third knob after the hedge ratio
+and the band edge whose sign flips between them, and it cannot be picked on
+either. It also dissolves the reading it was built on: the low-volatility
+members of the selection, reported as +5.38 and +5.55 in the previous section,
+earn those numbers because the low-volatility universe they are measured
+against also fell less, and the same names measured as a membership rather
+than as a comparison earn -11.89 on the fit half.
+
+So the honest statement of the sizing question is that every volatility
+weighting and grouping tried here trades the two halves against each other,
+and the reason is visible in the mechanism: a book weighted toward the quiet
+names carries less of the cross-section it sits in, which pays when the
+cross-section falls and costs when it rises, and that is the same
+down-market exposure the excess split above identified. It is not an alpha and
+it is not sizeable as one.
+
 ## Where this leaves the signal
 
-Rank IC +0.0633 on the fit half and +0.0521 on the graded half. Whole-universe
-excess -2.20 and +6.00. Low-volatility members of the selection +5.38 and
-+5.55. Band re-picked inside the low-volatility half +0.46 and +2.02. The
-first of those that is a property of the signal rather than of the year is the
-low-volatility one, and it is now known not to be reachable by restricting the
-universe, because the ranking that finds those names is made over the whole
-cross-section.
+Rank IC +0.0633 on the fit half and +0.0521 on the graded half, positive on
+70.9 and 66.0 percent of sessions. The whole-universe excess is -2.20 and
++6.00, and on the fit half every volatility re-weighting and grouping tried
+above makes it worse. The signal ranks; the ranking as a book has not been
+shown to earn anything that survives both halves.
 
-So the selection's edge is concentrated in a subset it already finds, and what
-is left to build is a way to size that subset rather than to re-select it.
-That is portfolio construction rather than signal discovery, it has not been
-measured here at all, and it is the next thing that could turn a positive
-ranking into a positive book.
+What has survived every attempt so far is the one thing that is measured
+rather than constructed: the signal still ranks in 2026, after 2024 and 2025
+were used to fit the model that produced it, and it ranks the quiet half
+better than the volatile half when the ranking is made over the whole
+cross-section. Neither of those is a tradable edge on its own, because every
+way of turning them into a book that has been tried here is a bet on the
+cross-section's direction rather than on the ranking.
+
+What is left is not a parameter. The three knobs that have been swept all flip
+sign between the halves: the hedge ratio, the band edge, and now the
+volatility weighting. The next thing worth measuring is therefore not another
+knob but whether the ranking's own contribution can be isolated from the
+cross-section's, by holding the cross-section's direction constant, which the
+one-session non-overlapping excess already does and which no knob tried here
+has survived. That is a question about the book, not about a setting, and it
+cannot be answered by another sweep on this one window.
 
 Three facts remain outside the repository and still gate deployment: a quoted
 lending rate, the shortability of the actual instruments, and whether an ETF
