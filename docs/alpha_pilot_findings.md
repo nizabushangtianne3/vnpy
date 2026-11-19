@@ -1500,32 +1500,124 @@ two and the third is size, clock and cost, not a dead signal, and it is the
 part that the next window has to be designed to attack rather than to
 re-measure.
 
+## The excess is a down-market exposure, not a cross-sectional alpha, and the scan that found it was fitted on the same half it was graded on
+
+The previous section measured the selection against its own universe and read
++6.35 percent of excess on the graded half. Read on one-session closes that
+number stands, but it does not mean what it appeared to mean, and the scan
+that followed it is the reason the distinction has to be stated before it is
+trusted.
+
+Split the graded half's daily excess by whether the cross-section itself rose
+or fell that session, with the most-traded decile removed so a hot shell
+cannot carry the cross-section's own average:
+
+| band | rising days, n | excess on rising days | falling days, n | excess on falling days |
+| --- | --- | --- | --- | --- |
+| 0.05-0.15 | 138 | +0.1177 | 129 | -0.0729 |
+| 0.15-0.25 | 138 | +0.0416 | 129 | +0.0372 |
+| 0.10-0.30 | 138 | +0.0472 | 129 | +0.0223 |
+| 0.20-0.50 | 138 | -0.0428 | 129 | +0.1069 |
+
+On the graded half the excess of every wide band comes from the sessions the
+market fell. The same split on the fit half, which is the half that says
+whether the reading is a regime or a property, is unambiguous:
+
+| band | rising days, n | excess on rising days | falling days, n | excess on falling days |
+| --- | --- | --- | --- | --- |
+| 0.05-0.15 | 155 | -0.0787 | 92 | +0.1032 |
+| 0.15-0.25 | 155 | -0.1711 | 92 | +0.2299 |
+| 0.10-0.30 | 155 | -0.1470 | 92 | +0.1922 |
+| 0.20-0.50 | 155 | -0.1689 | 92 | +0.2030 |
+
+On the fit half every one of these bands **loses on the sessions the market
+rose and wins on the sessions it fell**, by more than it wins. That is a
+down-market exposure: the book is long names that fall less when the
+cross-section falls and rise less when it rises. It is the shape that earns a
+negative premium overall and a positive premium in a falling year, which is
+what 2026 was. It is not an alpha, because an alpha would pay on both sides
+of the cross-section's average and this one pays only on one.
+
+This is the third time in this note that a positive-looking number has been
+produced by a market that moved in one direction. The first was total return
+in a rising market, the second was the short leg's directional return in a
+falling one, and this is the third: the band's excess in a falling half. The
+gate that catches all three is the same, and it is that a book graded only
+against its own universe still inherits the universe's sign.
+
+## The scan that ranked bands on the graded half is not a selection
+
+The band scan was run on the graded half and read the ranking directly off
+it. On the graded half, wider and lower bands look better, up to +10.95
+percent for 0.15-0.25 against +6.35 for the 5-to-15 percent band the strategy
+actually holds. On the fit half the order reverses, and the reversal is
+monotonic in the band's position:
+
+| band | fit excess% | graded excess% |
+| --- | --- | --- |
+| 0.00-0.05 | +8.31 | +1.13 |
+| 0.05-0.15 | -1.81 | +6.35 |
+| 0.10-0.20 | -3.88 | +8.40 |
+| 0.15-0.25 | -5.11 | +10.95 |
+| 0.20-0.50 | -5.60 | +8.91 |
+
+The corumers toward the signal's top rank behave the opposite way on the two
+halves, so no single band is good in both. This is the same failure the
+hedge-ratio section recorded, arriving from a different knob: a parameter
+whose sign flips between halves cannot be picked on either half, and the
+sweep table above is therefore not evidence for any band in it.
+
+Month by month, 0.15-0.25 is positive in 11 of 14 graded months and
+0.05-0.15 in 8 of 14. The wider band is steadier, which is consistent with
+it being more of a defensive exposure rather than less of a bet, and it is
+not by itself a reason to prefer it.
+
 ## What is next
 
-The book survives out of sample at full hedge and the survival is known to be
-the short leg's directional return rather than the selection's. That is now
-joined by a second, independent measurement that survives it: the selection
-beats its equal-weight universe by 6.35 percent on the graded half, and it
-did so on a clock the engine does not use and with nothing in the engine's
-order path able to contribute.
+The honest state of the selection is now: rank IC is positive on both halves
+(+0.0638 and +0.0530, ICIR 0.55 and 0.48), the book beats its universe on the
+graded half (+6.35 percent, non-overlapping closes), and that excess is
+explained by a down-market exposure that costs more on the fit half than it
+earns. The signal ranks; the ranking as currently held does not pay on both
+sides of the cross-section's average.
 
-What that measurement changes is the target. A selection worth +6.35 percent
-of cross-section-relative return over 268 sessions is not worth 3.78 percent
-of absolute return, and it is not negative either, so the work is not "is
-there an edge" but "why does the engine only realise -0.05 of it". The
-candidates are the three the two readings between them isolate: the book is
-sized at a quarter of capital when the signal's own edge is measured at a
-190-to-400 name band, the rebalance clock is 30 sessions against a five
-session label so a third of the holding is stale by construction, and the
-turnover is 3.14 times capital against a measured cost of about a point of
-return a year. Each of those is a setting rather than a discovery, which
-means the next test is a sweep on what the book holds and how often, scored
-against the same non-overlapping cross-section-relative yardstick that
-produced the +6.35, and not against a total-return table that moves with the
-market.
+The signal's edge is in the low-volatility half, and it was hidden by averaging it with the high-volatility half
 
-The two things that decide whether any of this is a business are still
-outside the repository. The lending rate and the shortability of the actual
-instruments are assumed here rather than quoted, and whether an ETF leg can
-carry a 1x hedge on a book of this size is a question about the real
-contract's liquidity and the real box's margin.
+Before this section, three attempts were made to test whether the excess survives a factor adjustment, and all three returned numbers identical to the unadjusted ones. That is not a finding about the signal, it is a property of the test: rank IC is computed on ranks, and subtracting a constant from every member of the cross-section leaves the ranks exactly as they were. Any "cross-sectional de-meaning" applied to a rank IC is a no-op by construction, and recording it as a return of the same number would have been recording the arithmetic instead of the market. The test that does measure something is a split of the universe by a characteristic the signal might be proxying, run on the book's own non-overlapping returns.
+
+Split by trailing 20-session volatility at the cross-sectional median:
+
+| half | universe | book% | excess% |
+| --- | --- | --- | --- |
+| fit | every name | +73.34 | -2.20 |
+| fit | lower half by volatility | +62.54 | +5.38 |
+| fit | upper half by volatility | +95.68 | -2.32 |
+| graded | every name | -3.53 | +6.00 |
+| graded | lower half by volatility | +2.48 | +5.55 |
+| graded | upper half by volatility | -13.26 | +2.51 |
+
+On both halves the excess comes from the lower half by volatility. On the fit half the whole universe is negative (-2.20) and the low-volatility half is positive (+5.38), so the signal's contribution there is entirely in the quiet names and the volatile names subtract from it. On the graded half the low-volatility half earns +5.55 against +6.00 for everything, which is to say that narrowing to the quiet half does not improve the graded half but does repair the fit half.
+
+That is the first split in this note that is positive on both halves at the same time, and it is the reason to say the signal is not merely a down-market exposure. The down-market reading above is still true and still important: a book graded against a universe that fell inherits some of that fall, and the graded half's +6.00 is measured against a universe that lost 8.83 percent. But a split that survives the fit half, where the same machinery failed, is evidence about the signal rather than about the year.
+
+## What is next
+
+The state of the selection is: rank IC positive on both halves (+0.0633 and +0.0521 on the full universe, +0.0638 and +0.0530 when the universe is restricted to names with a volatility figure), the excess positive on the graded half (+6.00) and negative on the fit half (-2.20) as a whole universe, and positive on both halves once the universe is split at the volatility median (+5.38 and +5.55). The signal is a low-volatility signal that is diluted by the volatile names it is currently holding alongside them.
+
+The work this defines is a re-run with the universe itself stratified, which is a setting rather than a discovery: hold the band inside the low-volatility half and measure the same non-overlapping cross-section-relative excess on both halves. The volatility split is the one characteristic the signal has now been shown to be confounded with, it is computed from the same cached bars the runner loads so no new data is required, and it is the first candidate that has been measured rather than assumed. If the stratified book earns a positive excess on both halves it becomes the book worth sizing, and if it does not, the volatility split has joined the hedge ratio and the band edge as a knob whose sign flips between halves.
+
+Three facts remain outside the repository and still gate deployment: a quoted lending rate, the shortability of the actual instruments, and whether an ETF leg can carry a 1x hedge on a book of this size.
+
+the down-market one, and the answer is already partly in hand: the IC is
+measured on raw forward returns, so a signal that ranks names by volatility
+or by downside beta would show positive IC in a falling half without being an
+alpha. The test that separates them is to re-measure the IC after removing
+the market's own contribution from the label, which is the same
+cross-sectional residual the excess split above is measuring, and it can be
+done on the cached bars without the engine. Until that is done the honest
+statement is that the ranking has not been shown to be anything other than a
+down-market exposure.
+
+What is outside the repository and still decides the business is unchanged:
+a quoted lending rate, the shortability of the actual instruments, and
+whether an ETF leg can carry a 1x hedge on a book of this size.
