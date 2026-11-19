@@ -1353,10 +1353,83 @@ a bad month.
 
 The first version of this measurement was wrong and the error is worth recording, because it would have produced the opposite conclusion. Compounding 208 overlapping five-session returns on `510300.SSE` reads **-51.68** percent for 2026, while the same year reads **-14.10** percent compounded session by session, **-14.33** percent in non-overlapping five-session blocks, and **-15.71** percent from the first close of the window to the last. The overlapping figure counts the same price move about four times over. A market that appears to fall by half justifies any loss, and only a fixed clock shows the book beat it.
 
+## The full hedge is the first configuration that survives out of sample
+
+Every section above was written against `hedge_ratio` values of 0.6 or less,
+and against the long book alone. That is now measured to have been the wrong
+place to look. At `hedge_ratio` 1.0, with a single ETF leg of 510300.SSE sized
+one to one against the long book, the graded half earns money:
+
+| borrow rate (annualised) | fit total% | fit fee% | hold total% | hold fee% | hold sharpe |
+| --- | --- | --- | --- | --- | --- |
+| 0% | +5.3906 | 0 | +3.7849 | 0 | 0.678 |
+| 2% | +4.9954 | 0.395 | +3.3920 | 0.393 | 0.610 |
+| 3% | +4.7978 | 0.593 | +3.1956 | 0.589 | 0.576 |
+| 8% (the old assumption) | +3.8097 | 1.581 | +2.2134 | 1.571 | 0.407 |
+
+The erosion is linear and has no break. Each 1 percent of annualised lending
+fee costs the graded half 0.19 to 0.20 percent, so the break-even is roughly
+19 to 20 percent annualised. An 8 percent fee, which is the figure the note
+used to carry, costs the half 1.57 percent and still leaves it positive.
+
+The exposure numbers explain why the ratio was the whole problem. With the
+full hedge in place `net_x` reads -0.0158 on the fit half and -0.0036 on the
+graded half: that is genuinely neutral, not partially neutral. `gross_x` is
+0.7147 and 0.5086. Every earlier configuration was running `net_x` of 0.26 to
+0.29, which is to say it was never a neutral book at all, and the claim that
+"market neutrality is the wrong shape" was a statement about a book that was
+not market neutral.
+
+## The financing leg does not exist, and the assumption is dropped
+
+A `gross_x` of about 0.51 on a 100 million book looks like 2x leverage, and it
+was recorded as an open question whether the long leg needs a financing cost.
+It does not, and the mechanism is in the engine rather than in the market. A
+short fill increases cash (`vnpy/alpha/strategy/backtesting.py:755`), the long
+book is sized off `book_value = get_holding_value() + cash`
+(`vnpy/alpha/strategy/strategies/market_neutral_strategy.py:225`), and the
+hedge leg is sized as `long_value * hedge_ratio` without touching the long
+side's cash budget (`market_neutral_strategy.py:302`). The engine carries no
+margin or frozen-cash concept anywhere. So the short leg funds itself out of
+the proceeds of its own sale, and no borrowing cost belongs on the long side.
+This removes a caveat that was written down before it was checked, and it
+should be read as a reminder that an unchecked assumption in this note has
+previously cost the note the opposite conclusion.
+
+## The market comparison has to be made on the book's own window
+
+The benchmark table this note carries reports calendar years. The book's
+graded half is not a calendar year: it runs 2025-10-01 to 2026-11-13, which is
+268 sessions, and it spans two calendar years. Read on that window instead:
+
+| benchmark, hold window 2025-10-01 to 2026-11-13 | total% |
+| --- | --- |
+| 510300.SSE, session-compounded | -13.879 |
+| equal weight, every stock, per-session cross-section | +1.605 |
+| per-stock median | -17.623 |
+| negative share of the 2713 stocks | 75.6% |
+
+The book earned +3.78 on this window at a zero lending fee. The important
+reading is not the spread over the mean, it is that the number is positive
+while 75.6 percent of the universe fell. The equal-weight cross-section mean
+is +1.605 on this window, so on the old framing the book appears to beat the
+market by 2.2 percent. That framing is wrong for this book, because the book
+is long the top decile of the signal and short a liquid basket, and neither
+leg is the equal-weight universe. The honest comparison is the neutral one
+above: positive where three quarters of names were negative.
+
 ## What is next
 
-The three fronts this note used to carry forward are all closed, and the answers are in. The ratio does not transfer out of sample, and the fit and graded halves rank it in opposite directions, so no single value of it is good in both. The long side earns 17.58 percent on the fit half and loses 0.30 percent on the graded half. Retraining at the 10-session horizon loses money faster on both halves, 5.89 and -3.56 percent against 17.58 and -0.30.
+The book now survives out of sample at full hedge. The two things that decide
+whether this is a business are not in this repository. The first is the
+lending rate and the shortability of the actual instruments: 2 percent leaves
++3.39 and 3 percent leaves +3.20 on the graded half, but those are assumed
+rates and no broker quote is on file, and 510300.SSE is an ETF whose lending
+supply differs from a single stock's. The second is whether an ETF leg can
+carry a 1x hedge on a book of this size, which is a question about the real
+contract's liquidity and the real box's margin, not about this engine.
 
-What is left is not a parameter. Every configuration measured here loses money on the graded half, and the loss is 2026 in every one of them, with net exposure between a quarter and a third of capital. The book is currently the market with a selection overlay on top, and the overlay has not paid for itself on the graded half in any of the three framings tried.
-
-The open empirical question, if this line continues, is the 2026 window itself: whether the graded half is a regime that a signal fitted before it cannot price, or a regime that the signal should have been able to survive. That is a question about the window, not about the book, and it cannot be answered by another sweep on the same data.
+What can still be measured here is whether +3.78 percent over 268 sessions is
+alpha or a regime. The graded half is one window. A second out-of-sample
+window, or a session-by-session attribution of the hedge leg's contribution,
+would separate the two; neither is a sweep and neither has been run.
