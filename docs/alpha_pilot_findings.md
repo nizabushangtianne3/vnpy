@@ -1572,7 +1572,7 @@ Month by month, 0.15-0.25 is positive in 11 of 14 graded months and
 it being more of a defensive exposure rather than less of a bet, and it is
 not by itself a reason to prefer it.
 
-## What is next
+
 
 The honest state of the selection is now: rank IC is positive on both halves
 (+0.0638 and +0.0530, ICIR 0.55 and 0.48), the book beats its universe on the
@@ -1601,23 +1601,54 @@ On both halves the excess comes from the lower half by volatility. On the fit ha
 That is the first split in this note that is positive on both halves at the same time, and it is the reason to say the signal is not merely a down-market exposure. The down-market reading above is still true and still important: a book graded against a universe that fell inherits some of that fall, and the graded half's +6.00 is measured against a universe that lost 8.83 percent. But a split that survives the fit half, where the same machinery failed, is evidence about the signal rather than about the year.
 
 ## What is next
+The work this defines is a re-run with the universe itself stratified, which
+is a setting rather than a discovery. That run has now been done and it gives
+a different answer depending on how the stratification is done, so both forms
+are recorded rather than the one that looked better.
 
-The state of the selection is: rank IC positive on both halves (+0.0633 and +0.0521 on the full universe, +0.0638 and +0.0530 when the universe is restricted to names with a volatility figure), the excess positive on the graded half (+6.00) and negative on the fit half (-2.20) as a whole universe, and positive on both halves once the universe is split at the volatility median (+5.38 and +5.55). The signal is a low-volatility signal that is diluted by the volatile names it is currently holding alongside them.
+The first form selects on the whole cross-section and then reports how the
+selection's low-volatility members did against the low-volatility universe.
+That is the reading in the table above, and it is the one that survives the
+fit half: +5.38 on the fit half and +5.55 on the graded half. The second form
+re-ranks inside the low-volatility half and re-picks the band from there, so
+the names are chosen by signal restricted to the quiet half rather than by
+signal over everything:
 
-The work this defines is a re-run with the universe itself stratified, which is a setting rather than a discovery: hold the band inside the low-volatility half and measure the same non-overlapping cross-section-relative excess on both halves. The volatility split is the one characteristic the signal has now been shown to be confounded with, it is computed from the same cached bars the runner loads so no new data is required, and it is the first candidate that has been measured rather than assumed. If the stratified book earns a positive excess on both halves it becomes the book worth sizing, and if it does not, the volatility split has joined the hedge ratio and the band edge as a knob whose sign flips between halves.
+| half | vol cut | book% | excess% |
+| --- | --- | --- | --- |
+| fit | none | +73.47 | -2.12 |
+| fit | lowest 50% | +55.34 | +0.46 |
+| fit | lowest 30% | +49.12 | +1.23 |
+| fit | lowest 20% | +39.53 | -2.41 |
+| graded | none | -3.41 | +6.12 |
+| graded | lowest 50% | -0.89 | +2.02 |
+| graded | lowest 30% | -1.22 | +1.63 |
+| graded | lowest 20% | -1.92 | +2.77 |
 
-Three facts remain outside the repository and still gate deployment: a quoted lending rate, the shortability of the actual instruments, and whether an ETF leg can carry a 1x hedge on a book of this size.
+Narrowing the universe does not repair the fit half and it destroys most of
+the graded half's excess. The volatility split is therefore a description of
+where the ranking is already sharper and not a parameter to tune. The ranking
+is sharper in the quiet half when the ranking is still made over the whole
+cross-section, and re-making it inside the quiet half makes it worse, which
+says that volatility and the signal interact rather than that one selects on
+the other.
 
-the down-market one, and the answer is already partly in hand: the IC is
-measured on raw forward returns, so a signal that ranks names by volatility
-or by downside beta would show positive IC in a falling half without being an
-alpha. The test that separates them is to re-measure the IC after removing
-the market's own contribution from the label, which is the same
-cross-sectional residual the excess split above is measuring, and it can be
-done on the cached bars without the engine. Until that is done the honest
-statement is that the ranking has not been shown to be anything other than a
-down-market exposure.
+## Where this leaves the signal
 
-What is outside the repository and still decides the business is unchanged:
-a quoted lending rate, the shortability of the actual instruments, and
-whether an ETF leg can carry a 1x hedge on a book of this size.
+Rank IC +0.0633 on the fit half and +0.0521 on the graded half. Whole-universe
+excess -2.20 and +6.00. Low-volatility members of the selection +5.38 and
++5.55. Band re-picked inside the low-volatility half +0.46 and +2.02. The
+first of those that is a property of the signal rather than of the year is the
+low-volatility one, and it is now known not to be reachable by restricting the
+universe, because the ranking that finds those names is made over the whole
+cross-section.
+
+So the selection's edge is concentrated in a subset it already finds, and what
+is left to build is a way to size that subset rather than to re-select it.
+That is portfolio construction rather than signal discovery, it has not been
+measured here at all, and it is the next thing that could turn a positive
+ranking into a positive book.
+
+Three facts remain outside the repository and still gate deployment: a quoted
+lending rate, the shortability of the actual instruments, and whether an ETF
+leg can carry a 1x hedge on a book of this size.
