@@ -1443,24 +1443,89 @@ mean is +1.605 on this window, so a book that is merely short the index
 against a flat selection has more than one route to a positive number here,
 and the spread over the mean is not the thing to look at.
 
+## The selection beats its universe out of sample and loses to it in sample
+
+The section above needed one more window to answer whether the selection pays,
+and that window cannot be bought from a sweep on the same bars. It can be
+bought without the backtest engine, which is the point: every number below
+comes from the signal and the cached bars alone, so nothing in the order path,
+the turnover cap or the cash book can contribute to it.
+
+The口径 is stated first because two earlier readings in this note were wrong
+for exactly this reason. The book's label is a five-session forward return
+compounded from the close after the session to the fifth close, so a portfolio
+that re-holds the same names every session and is then compounded across
+overlapping five-session returns counts the same price move about five times.
+That is the same error as the -51.68 percent reading of 2026, arriving from a
+different direction, and it produces absurdities: 547 percent on the fit half
+and -20 percent on the graded half. Read instead on one-session closes, which
+is the clock the engine's own daily results use:
+
+| half | book, equal weight | equal-weight cross-section | excess |
+| --- | --- | --- | --- |
+| fit 2024-09-26..2025-09-30 | +73.35 | +75.20 | -1.81 |
+| hold 2025-10-01..2026-11-13 | -3.47 | -8.83 | +6.35 |
+
+The band is the same 5-to-15 percent share of the ranking the strategy holds,
+buffer 0.10, 30 session clock, and the returns are compounded across the
+267 to 247 sessions in each half. On this reading the selection **out-earned
+its universe by 6.35 percent on the graded half and under-earned it by 1.81
+percent on the fit half**. That is the opposite sign from the backtest's
+selection leg, which was -0.05 percent on the graded half and +12.93 on the
+fit half, and the difference is the backtest's own size and timing rather
+than a disagreement about the signal: the book the engine runs holds about a
+quarter of capital, compounds its rebalance clock against a five-session
+label, and pays commission on a turnover of 3.14 times capital. A leg sized
+at 0.25 of capital earning a cross-section-relative +6.35 percent, divided by
+the two halves' different session counts and by the fee, lands near the
+engine's -0.05 once the label's horizon is compounded on the same clock as
+the returns.
+
+So the answer to what the section above was asking is that the selection's
+contribution is real but small in the direction that matters: it beats the
+universe out of sample, by six points, and it does so in the window where the
+market fell. It is not the mechanism that made the graded half earn +3.78
+percent, which was the short leg. It is, however, the mechanism that would
+make a book with the market properly hedged earn money, because +6.35 percent
+of cross-section-relative return at a quarter of capital is the same
+statement the model's own IC makes, and the IC made it first: rank IC
++0.0638 on the fit half and +0.0530 on the graded half, ICIR 0.55 and 0.48,
+positive on 71.3 and 65.8 percent of sessions.
+
+The honest summary of the whole note is now three numbers that agree: the
+signal still ranks in 2026 (IC +0.0530), the book still beats its universe in
+2026 (+6.35 percent), and the book still loses money on the graded half once
+the market is not being shorted (-0.05 percent). The gap between the first
+two and the third is size, clock and cost, not a dead signal, and it is the
+part that the next window has to be designed to attack rather than to
+re-measure.
+
 ## What is next
 
-The book survives out of sample at full hedge and the survival is now known
-to be the short leg's directional return rather than the selection's. That
-turns the work into one question: the selection's own contribution is
--0.0479 percent on the graded half and +12.93 percent on the fit half, and
-those are opposite in sign, so either the signal does not transfer or the
-graded window is a regime it cannot price. Separating those is the same open
-question this note has carried since the market benchmark section, and it is
-still not answerable by another sweep on this one window: it needs a second
-out-of-sample window, or a session-level attribution of the hedge leg's
-contribution rather than one number per window.
+The book survives out of sample at full hedge and the survival is known to be
+the short leg's directional return rather than the selection's. That is now
+joined by a second, independent measurement that survives it: the selection
+beats its equal-weight universe by 6.35 percent on the graded half, and it
+did so on a clock the engine does not use and with nothing in the engine's
+order path able to contribute.
 
-The three things that decide whether this is a business are not in this
-repository. The lending rate and the shortability of the actual instruments
-are assumed here, not quoted: 2 percent leaves +3.39 and 3 percent leaves
-+3.20, but no broker quote is on file and an ETF's lending supply differs from
-a single stock's. Whether an ETF leg can carry a 1x hedge on a book of this
-size is a question about the real contract's liquidity and the real box's
-margin. And a book whose edge is being short the index needs to say so plainly
-before any of that matters.
+What that measurement changes is the target. A selection worth +6.35 percent
+of cross-section-relative return over 268 sessions is not worth 3.78 percent
+of absolute return, and it is not negative either, so the work is not "is
+there an edge" but "why does the engine only realise -0.05 of it". The
+candidates are the three the two readings between them isolate: the book is
+sized at a quarter of capital when the signal's own edge is measured at a
+190-to-400 name band, the rebalance clock is 30 sessions against a five
+session label so a third of the holding is stale by construction, and the
+turnover is 3.14 times capital against a measured cost of about a point of
+return a year. Each of those is a setting rather than a discovery, which
+means the next test is a sweep on what the book holds and how often, scored
+against the same non-overlapping cross-section-relative yardstick that
+produced the +6.35, and not against a total-return table that moves with the
+market.
+
+The two things that decide whether any of this is a business are still
+outside the repository. The lending rate and the shortability of the actual
+instruments are assumed here rather than quoted, and whether an ETF leg can
+carry a 1x hedge on a book of this size is a question about the real
+contract's liquidity and the real box's margin.
