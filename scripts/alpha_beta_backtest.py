@@ -165,6 +165,7 @@ def build_engine(
     buy_rate: float,
     sell_rate: float,
     borrow_rate: float,
+    signal_lag: int = 0,
 ) -> BacktestingEngine:
     """Set up one engine run with the band strategy."""
     engine = BacktestingEngine(lab)
@@ -189,6 +190,7 @@ def build_engine(
             "max_turnover_ratio": max_turnover_ratio,
             "open_rate": buy_rate,
             "close_rate": sell_rate,
+            "signal_lag": signal_lag,
         }
     else:
         strategy_class = RankBandStrategy
@@ -201,6 +203,7 @@ def build_engine(
             "max_turnover_ratio": max_turnover_ratio,
             "open_rate": buy_rate,
             "close_rate": sell_rate,
+            "signal_lag": signal_lag,
         }
     engine.add_strategy(
         strategy_class,
@@ -412,6 +415,12 @@ def main() -> int:
         help="override the sell-side rate; 0 uses the modelled fees",
     )
     parser.add_argument(
+        "--signal-lag",
+        type=int,
+        default=0,
+        help="sessions between the signal used and the bar traded",
+    )
+    parser.add_argument(
         "--sweep",
         action="store_true",
         help="run the bands the beta table says are worth measuring",
@@ -512,6 +521,7 @@ def main() -> int:
             stock_buy,
             stock_sell,
             args.borrow_rate,
+            args.signal_lag,
         )
         summary = summarise(engine, args.capital)
         by_year = yearly(engine)

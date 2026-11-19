@@ -23,6 +23,7 @@ quietly become a turnover.
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 
 from vnpy.alpha import AlphaStrategy
 from vnpy.trader.constant import Direction
@@ -116,11 +117,13 @@ class RankBandStrategy(AlphaStrategy):
     close_rate: float = 0.0015
     min_commission: int = 5
     price_add: float = 0.05
+    signal_lag: int = 0         # sessions between the signal used and the bar traded
 
     def on_init(self) -> None:
         """Initialize holding state."""
         self.holding_days: defaultdict[str, int] = defaultdict(int)
         self.bars_since_rebalance: int = self.rebalance_days
+        self.seen_session_dates: list[datetime] = []
         self.write_log("排名区间策略初始化")
 
     def on_trade(self, trade: TradeData) -> None:
@@ -134,12 +137,17 @@ class RankBandStrategy(AlphaStrategy):
         for vt_symbol in pos_symbols:
             self.holding_days[vt_symbol] += 1
 
+        bars_datetime = next(iter(bars.values())).datetime.replace(tzinfo=None) if bars else None
+        if bars_datetime and (not self.seen_session_dates or self.seen_session_dates[-1] != bars_datetime):
+            self.seen_session_dates.append(bars_datetime)
         self.bars_since_rebalance += 1
         if self.bars_since_rebalance < self.rebalance_days:
             return
         self.bars_since_rebalance = 0
 
-        last_signal = self.get_signal().sort("signal", descending=True)
+        index = max(len(self.seen_session_dates) - 1 - self.signal_lag, 0)
+        target_datetime = self.seen_session_dates[index] if self.signal_lag else None
+        last_signal = self.get_signal(target_datetime).sort("signal", descending=True)
         if not last_signal.height:
             return
 

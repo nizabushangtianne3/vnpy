@@ -4,6 +4,7 @@ Template for alpha strategies that trade toward target positions.
 
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import polars as pl
@@ -77,9 +78,9 @@ class AlphaStrategy(metaclass=ABCMeta):
         if not order.is_active() and order.vt_orderid in self.active_orderids:
             self.active_orderids.remove(order.vt_orderid)
 
-    def get_signal(self) -> pl.DataFrame:
-        """Get current signal"""
-        return self.strategy_engine.get_signal()
+    def get_signal(self, dt: datetime | None = None) -> pl.DataFrame:
+        """Get the signal for ``dt``, or for the current session when absent."""
+        return self.strategy_engine.get_signal(dt)
 
     def buy(self, vt_symbol: str, price: float, volume: float) -> list[str]:
         """Buy to open position"""

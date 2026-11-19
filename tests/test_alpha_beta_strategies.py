@@ -13,9 +13,11 @@ selection the hedge is there to preserve.
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 from pathlib import Path
 from typing import cast
 
+import polars as pl
 from vnpy.trader.object import BarData
 from vnpy.trader.constant import Exchange, Interval
 from datetime import datetime
@@ -231,6 +233,8 @@ def test_buffered_band_keeps_a_held_name_that_fell_just_past_the_edge():
     kept = band.buffered_band(universe, {"E"}, 10, 0.2, 0.4, 0.2)
     assert "E" in kept
     assert len(kept) == 2
+
+
 def test_buffered_band_sells_a_held_name_that_fell_far():
     """A name that genuinely fell out has to actually fall out.
 
@@ -243,6 +247,8 @@ def test_buffered_band_sells_a_held_name_that_fell_far():
     kept = band.buffered_band(universe, {"F"}, 10, 0.2, 0.4, 0.05)
     assert "F" not in kept
     assert kept == ["C", "D"]
+
+
 def test_buffered_band_never_runs_past_the_cross_section():
     """A buffer that runs past the end of the universe selects everything."""
     universe = ["A", "B", "C", "D", "E"]
@@ -295,6 +301,54 @@ def test_buffered_band_neutral_strategy_shares_the_one_implementation():
     universe = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
     # This file loads each module separately, so identity cannot be compared;
     # the shared behaviour is what keeps the two books alike.
-    assert neutral.buffered_band(universe, {"E"}, 10, 0.2, 0.4, 0.2) == band.buffered_band(
+    assert neutral.buffered_band(
         universe, {"E"}, 10, 0.2, 0.4, 0.2
-    )
+    ) == band.buffered_band(universe, {"E"}, 10, 0.2, 0.4, 0.2)
+
+
+def test_signal_lag_selects_the_session_it_names():
+    """The lag is counted in trading sessions, not in calendar days.
+
+    A session calendar is built from the bars the strategy has already seen,
+    so a weekend does not make lag one reach back to the wrong session. The
+    signal on the rebalance session is the signal computed on that session
+    minus the lag's session count.
+    """
+    seen: list[datetime | None] = []
+    for _session in (datetime(2026, 1, 5), datetime(2026, 1, 6), datetime(2026, 1, 7)):
+
+        def engine_get_signal(dt: datetime | None = None) -> pl.DataFrame:
+            seen.append(dt)
+            return pl.DataFrame(schema={"vt_symbol": pl.String, "signal": pl.Float64})
+
+        if not seen:
+            strategy = band.RankBandStrategy(
+                cast(
+                    BacktestingEngine,
+                    SimpleNamespace(
+                        get_signal=engine_get_signal,
+                        write_log=lambda msg, strategy=None: None,
+                    ),
+                ),
+                "lag",
+                [],
+                {"signal_lag": 1, "rebalance_days": 1},
+            )
+            strategy.on_init()
+        strategy.strategy_engine = cast(
+            BacktestingEngine,
+            SimpleNamespace(
+                get_signal=engine_get_signal,
+                write_log=lambda msg, strategy=None: None,
+            ),
+        )
+        strategy.on_bars({"000001.SZSE": make_bar("000001.SZSE", 10.0, 100)})
+    # Rebalance fires on every bar here because the clock was initialised
+    # to fire, so each call read the previous session's signal.
+    # The first rebalance has no earlier session to reach, so the lag clamps
+    # to the earliest session the strategy has seen rather than going past it.
+    assert seen == [
+        datetime(2026, 1, 5),
+        datetime(2026, 1, 5),
+        datetime(2026, 1, 5),
+    ]

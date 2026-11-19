@@ -766,17 +766,18 @@ class BacktestingEngine:
             return bar.turnover / bar.volume
         return bar.close_price
 
-    def get_signal(self) -> pl.DataFrame:
-        """Get model prediction signal for current time"""
+    def get_signal(self, dt: datetime | None = None) -> pl.DataFrame:
+        """Get model prediction signal for the session ``dt`` or the current one."""
         if not self.datetime:
             self.write_log("尚未开始数据回放，无法加载模型预测值")
             return pl.DataFrame()
 
-        dt: datetime = self.datetime.replace(tzinfo=None)
-        signal: pl.DataFrame = self.signal_df.filter(pl.col("datetime") == dt)
+        current: datetime = self.datetime.replace(tzinfo=None)
+        session: datetime = current if dt is None else dt
+        signal: pl.DataFrame = self.signal_df.filter(pl.col("datetime") == session)
 
         if signal.is_empty():
-            self.write_log(f"找不到{dt}对应的信号模型预测值")
+            self.write_log(f"找不到{session}对应的信号模型预测值")
 
         return signal
 

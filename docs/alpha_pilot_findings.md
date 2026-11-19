@@ -1943,6 +1943,38 @@ rebalancing at band 5%/5% or the 30-session clock at the same band, and the
 question that remains is whether the engine can trade either at a cost that
 clears the fee gate it already uses.
 
+## The engine has the honest ruler now, and it reads differently from the spread
+
+A ``signal_lag`` setting is on the engine. The strategies keep a session
+calendar built from the bars they have already seen, and the rebalance reads the
+signal from ``signal_lag`` sessions back, while the orders are still crossed on
+the bar of the session being traded. Lag 0 is the previous behaviour, lag 1 is
+the honest ruler the offline spread measured.
+
+The long-only band on the 250-session signal, 5-15 with a 0.10 buffer on a
+30-session clock, 2022-01-20 through 2024-12-31:
+
+| setting | total% | annual% | sharpe | max dd% | turnover x | commission fraction |
+| --- | --- | --- | --- | --- | --- | --- |
+| lag 0 | +7.1806 | +2.4137 | 0.3729 | -9.0651 | 8.35 | 0.42% |
+| lag 1 | +3.8595 | +1.2973 | 0.2238 | -9.8063 | 8.28 | 0.42% |
+
+The offline spread, which was measured on the same window, band and clock as a
+daily long-short, reads +0.12 percent a session at lag 1 and was not
+significant at the 30-session clock without the per-session shaping the
+long-short book gives it. The engine's long-only number sits between the
+offline long-short and the lag-0 baseline, and the difference is that the
+engine's long-only book does not hold the short side, so the cross-section's
+direction is still inside it.
+
+Both lag readings are positive over the window, and neither is the
+contamination-free number the offline spread measured. What this run does
+prove is that the honest ruler is reachable from the engine, which is what the
+previous section said was the remaining work. What it does not yet prove is
+that the engine's own long-short, at a band and clock that clear the offline
+gates, is profitable after the engine's own costs, and that is the next
+measurement.
+
 ## Where this leaves the signal
 
 The three knobs that have been swept all flip sign between the halves: the
