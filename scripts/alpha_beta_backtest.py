@@ -249,6 +249,58 @@ def summarise(engine: BacktestingEngine, capital: float) -> dict:
     }
 
 
+def leg_split(engine: BacktestingEngine, hedge_symbol: str) -> dict:
+    """Split every session's net pnl into the hedge leg and everything else.
+
+    A positive total on the graded half can come from the selection or from
+    the hedge leg alone, and a book that is long a falling market and short a
+    falling index is a different bet from a book whose selection paid. The
+    engine keeps one ContractDailyResult per contract per day, so the split is
+    read directly off them rather than inferred from the signals.
+    """
+    if not hedge_symbol:
+        return {}
+    rows: list[dict] = []
+    for daily in engine.daily_results.values():
+        hedge: float = 0.0
+        rest: float = 0.0
+        hedge_turnover: float = 0.0
+        rest_turnover: float = 0.0
+        for vt_symbol, cr in daily.contract_results.items():
+            if vt_symbol == hedge_symbol:
+                hedge += cr.net_pnl
+                hedge_turnover += cr.turnover
+            else:
+                rest += cr.net_pnl
+                rest_turnover += cr.turnover
+        rows.append(
+            {
+                "date": daily.date.isoformat(),
+                "hedge_net": round(hedge, 2),
+                "rest_net": round(rest, 2),
+                "total_net": round(hedge + rest, 2),
+                "hedge_turnover": round(hedge_turnover, 2),
+                "rest_turnover": round(rest_turnover, 2),
+            }
+        )
+    if not rows:
+        return {}
+    hedge_net: float = sum(row["hedge_net"] for row in rows)
+    rest_net: float = sum(row["rest_net"] for row in rows)
+    return {
+        "hedge_symbol": hedge_symbol,
+        "sessions": len(rows),
+        "hedge_net": round(hedge_net, 2),
+        "rest_net": round(rest_net, 2),
+        "total_net": round(hedge_net + rest_net, 2),
+        "hedge_positive_sessions": sum(1 for row in rows if row["hedge_net"] > 0),
+        "rest_positive_sessions": sum(1 for row in rows if row["rest_net"] > 0),
+        "hedge_turnover": round(sum(row["hedge_turnover"] for row in rows), 2),
+        "rest_turnover": round(sum(row["rest_turnover"] for row in rows), 2),
+        "daily": rows,
+    }
+
+
 def yearly(engine: BacktestingEngine) -> dict:
     """The gate reads one number over the whole window; a year can still hide."""
     df = engine.daily_df
@@ -472,6 +524,7 @@ def main() -> int:
             "hedge_ratio": args.hedge_ratio if args.strategy == "neutral" else None,
             "summary": summary,
             "by_year": by_year,
+            "legs": leg_split(engine, args.hedge_symbol),
         }
         results.append(result)
         print(json.dumps(result, ensure_ascii=False, indent=1))

@@ -1353,12 +1353,11 @@ a bad month.
 
 The first version of this measurement was wrong and the error is worth recording, because it would have produced the opposite conclusion. Compounding 208 overlapping five-session returns on `510300.SSE` reads **-51.68** percent for 2026, while the same year reads **-14.10** percent compounded session by session, **-14.33** percent in non-overlapping five-session blocks, and **-15.71** percent from the first close of the window to the last. The overlapping figure counts the same price move about four times over. A market that appears to fall by half justifies any loss, and only a fixed clock shows the book beat it.
 
-## The full hedge is the first configuration that survives out of sample
+## The full hedge is the first configuration that survives out of sample, and the reason is not the selection
 
 Every section above was written against `hedge_ratio` values of 0.6 or less,
-and against the long book alone. That is now measured to have been the wrong
-place to look. At `hedge_ratio` 1.0, with a single ETF leg of 510300.SSE sized
-one to one against the long book, the graded half earns money:
+and against the long book alone. At `hedge_ratio` 1.0, with a single ETF leg of
+510300.SSE sized one to one against the long book, the graded half earns money:
 
 | borrow rate (annualised) | fit total% | fit fee% | hold total% | hold fee% | hold sharpe |
 | --- | --- | --- | --- | --- | --- |
@@ -1367,26 +1366,55 @@ one to one against the long book, the graded half earns money:
 | 3% | +4.7978 | 0.593 | +3.1956 | 0.589 | 0.576 |
 | 8% (the old assumption) | +3.8097 | 1.581 | +2.2134 | 1.571 | 0.407 |
 
-The erosion is linear and has no break. Each 1 percent of annualised lending
-fee costs the graded half 0.19 to 0.20 percent, so the break-even is roughly
-19 to 20 percent annualised. An 8 percent fee, which is the figure the note
-used to carry, costs the half 1.57 percent and still leaves it positive.
-
 The exposure numbers explain why the ratio was the whole problem. With the
 full hedge in place `net_x` reads -0.0158 on the fit half and -0.0036 on the
-graded half: that is genuinely neutral, not partially neutral. `gross_x` is
-0.7147 and 0.5086. Every earlier configuration was running `net_x` of 0.26 to
-0.29, which is to say it was never a neutral book at all, and the claim that
-"market neutrality is the wrong shape" was a statement about a book that was
-not market neutral.
+graded half. Every earlier configuration was running `net_x` of 0.26 to 0.29,
+which is to say it was never a neutral book at all.
+
+## The hold half's profit is the short leg's, not the selection's
+
+This is the finding that changes what the table above means, and it was not
+visible until the book's own numbers were split by contract. The engine keeps
+one `ContractDailyResult` per contract per day
+(`vnpy/alpha/strategy/backtesting.py:863`), and `leg_split` in
+`scripts/alpha_beta_backtest.py` now reads the hedge instrument's net pnl
+separately from everything else. Both halves, at a zero lending fee:
+
+| half | sessions | hedge leg net | rest net | total net | sessions hedge>0 | sessions rest>0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| fit 2024-09-26..2025-09-30 | 247 | -7,537,181 | +12,927,777 | +5,390,596 | 105 | 162 |
+| hold 2025-10-01..2026-11-13 | 268 | +3,832,772 | -47,857 | +3,784,915 | 136 | 143 |
+
+As a share of the 100 million book, the hold half's +3.7849 percent is
++3.8328 from the short leg and -0.0479 from the selection. **The selection
+lost money on the graded half.** What paid was being short a market that fell
+13.879 percent on the same window, and the same reading holds the other way
+round on the fit half: there the selection earned +12.93 percent and the short
+leg lost -7.54 percent against a market that rose 30.247 percent.
+
+So the book is not a market-neutral alpha engine with a hedge attached. It is
+two legs that each take the market's direction with the opposite sign, and
+whichever leg matches the market's sign collects. The graded half's +3.78
+percent is a directional bet on 2026's decline, sized at roughly a quarter of
+capital on each side, that happened to be right. It is not evidence that the
+selection works out of sample, and the honest statement of the graded half is
+that the overlay was negative and the market covered it.
+
+This does not make the configuration worthless, and it does not license going
+back to the ratios below 1.0. A half-short book still carried net exposure of
+0.26 to 0.29 and lost on the graded half. What it changes is the claim: the
+graded half earned +3.78 percent because the market fell 13.9 percent, and a
+book whose profit is a leveraged view on the index's direction is not a
+business until the selection itself pays.
 
 ## The financing leg does not exist, and the assumption is dropped
 
-A `gross_x` of about 0.51 on a 100 million book looks like 2x leverage, and it
-was recorded as an open question whether the long leg needs a financing cost.
-It does not, and the mechanism is in the engine rather than in the market. A
-short fill increases cash (`vnpy/alpha/strategy/backtesting.py:755`), the long
-book is sized off `book_value = get_holding_value() + cash`
+A `gross_x` of 0.7147 on the fit half and 0.5086 on the graded half looks like
+leverage, and it was recorded as an open question whether the long leg needs a
+financing cost. It does not, and the mechanism is in the engine rather than in
+the market. A short fill increases cash (`vnpy/alpha/strategy/backtesting.py:755`),
+the long book is sized off
+`book_value = get_holding_value() + cash`
 (`vnpy/alpha/strategy/strategies/market_neutral_strategy.py:225`), and the
 hedge leg is sized as `long_value * hedge_ratio` without touching the long
 side's cash budget (`market_neutral_strategy.py:302`). The engine carries no
@@ -1409,27 +1437,30 @@ graded half is not a calendar year: it runs 2025-10-01 to 2026-11-13, which is
 | per-stock median | -17.623 |
 | negative share of the 2713 stocks | 75.6% |
 
-The book earned +3.78 on this window at a zero lending fee. The important
-reading is not the spread over the mean, it is that the number is positive
-while 75.6 percent of the universe fell. The equal-weight cross-section mean
-is +1.605 on this window, so on the old framing the book appears to beat the
-market by 2.2 percent. That framing is wrong for this book, because the book
-is long the top decile of the signal and short a liquid basket, and neither
-leg is the equal-weight universe. The honest comparison is the neutral one
-above: positive where three quarters of names were negative.
+The book earned +3.78 on this window at a zero lending fee, and on the leg
+split above it earned it from the short side. The equal-weight cross-section
+mean is +1.605 on this window, so a book that is merely short the index
+against a flat selection has more than one route to a positive number here,
+and the spread over the mean is not the thing to look at.
 
 ## What is next
 
-The book now survives out of sample at full hedge. The two things that decide
-whether this is a business are not in this repository. The first is the
-lending rate and the shortability of the actual instruments: 2 percent leaves
-+3.39 and 3 percent leaves +3.20 on the graded half, but those are assumed
-rates and no broker quote is on file, and 510300.SSE is an ETF whose lending
-supply differs from a single stock's. The second is whether an ETF leg can
-carry a 1x hedge on a book of this size, which is a question about the real
-contract's liquidity and the real box's margin, not about this engine.
+The book survives out of sample at full hedge and the survival is now known
+to be the short leg's directional return rather than the selection's. That
+turns the work into one question: the selection's own contribution is
+-0.0479 percent on the graded half and +12.93 percent on the fit half, and
+those are opposite in sign, so either the signal does not transfer or the
+graded window is a regime it cannot price. Separating those is the same open
+question this note has carried since the market benchmark section, and it is
+still not answerable by another sweep on this one window: it needs a second
+out-of-sample window, or a session-level attribution of the hedge leg's
+contribution rather than one number per window.
 
-What can still be measured here is whether +3.78 percent over 268 sessions is
-alpha or a regime. The graded half is one window. A second out-of-sample
-window, or a session-by-session attribution of the hedge leg's contribution,
-would separate the two; neither is a sweep and neither has been run.
+The three things that decide whether this is a business are not in this
+repository. The lending rate and the shortability of the actual instruments
+are assumed here, not quoted: 2 percent leaves +3.39 and 3 percent leaves
++3.20, but no broker quote is on file and an ETF's lending supply differs from
+a single stock's. Whether an ETF leg can carry a 1x hedge on a book of this
+size is a question about the real contract's liquidity and the real box's
+margin. And a book whose edge is being short the index needs to say so plainly
+before any of that matters.
