@@ -1845,6 +1845,104 @@ not yet measurable is what a research result looks like before it has an
 implementation, and the implementation would need a signal whose construction
 differs from the one measured here.
 
+## The daily-spread ruler was measuring the decision session's own return
+
+Every daily-spread number in this note credits the book with the return of the
+session it was selected on: the selection is made at session d's close and the
+spread is ``close(d) / close(d-1) - 1``, which is the return realised during
+that same session. A signal computed at the close of d cannot earn session d's
+return, so that reading is a look-ahead, and it is the ruler every long-short
+book was judged by.
+
+The tell is the per-session rank IC of the signal against the return it is
+credited with, which is the cheapest test that could have caught it:
+
+| lag | rank IC | sessions |
+| --- | --- | --- |
+| 0 | **-0.0639** | 712 |
+| 1 | +0.0224 | 1160 |
+| 2 | +0.0177 | 1157 |
+| 3 | +0.0153 | 1155 |
+| 5 | +0.0135 | 1151 |
+
+At lag 0 the signal is anti-correlated with the return it was credited with,
+which is what a same-session contamination looks like: names that are already
+moving before the signal is computed are not the ones the signal wants to hold
+for the following session, so the ranking and the session's return move in
+opposite directions. Once the return is shifted out to the next session the
+same signal reads positive, and stays positive out to lag 5.
+
+The consequence is that the long-short t statistics in the preceding sections,
+which were all computed at lag 0, are not measuring the book. They are measuring
+how the signal relates to the session it was picked on. The market-neutral
+reading of "indistinguishable from zero" was correct on that contaminated
+ruler, and the question it was trying to answer had not yet been asked.
+
+## The lag-one book is the first long-short result that clears a null control
+
+Moving the credited return to the next session is the honest ruler, and the
+result is different. Daily rebalancing, which was the configuration that most
+exposed the contamination, is the one that now reads strongest, because it
+removes the buffering that dilutes a signal which is about the next session
+rather than about the current one.
+
+Band 5%/5%, buffer 0.10, rebalance 5 sessions, cost 3bp buy / 13bp sell
+(transfer fee on both sides, stamp tax on the sell side), net of costs:
+
+| window | net% per session | t | p | cost as share of gross |
+| --- | --- | --- | --- | --- |
+| 2022-2024 (model never saw) | +0.1927 | 3.09 | 0.002 | 2.0% |
+| 2025-2026 | +0.2694 | 4.18 | 0.000 | 2.2% |
+
+At the 30-session clock the margin thins:
+
+| window | net% per session | t | p | cost as share of gross |
+| --- | --- | --- | --- | --- |
+| 2022-2024 | +0.1199 | 1.98 | 0.048 | 0.4% |
+| 2025-2026 | +0.1129 | 1.97 | 0.049 | 0.5% |
+
+Random-signal control, four shuffles of the real signal within each session:
+
+| window | real net% | shuffle min | shuffle max | reading |
+| --- | --- | --- | --- | --- |
+| 2022-2024 clock 5 | +0.1927 | -0.0388 | -0.0251 | outside the null |
+| 2022-2024 clock 30 | +0.1199 | -0.0101 | +0.0007 | outside the null |
+| 2025-2026 clock 5 | +0.2694 | -0.0521 | -0.0194 | outside the null |
+| 2025-2026 clock 30 | +0.1129 | -0.0249 | -0.0043 | outside the null |
+
+The shuffle distribution is entirely below zero, because a book whose ranking
+carries nothing still pays the trading cost of getting in and out, so what a
+shuffle loses is the cost of being wrong and the real signal clears that floor.
+The gross numbers confirm it: the real signal earns +0.21 and +0.29 percent a
+session before costs, while the shuffles earn roughly zero or below, so the
+ranking earns a spread and does not merely avoid paying for nothing.
+
+## What the contamination changes and what it does not
+
+The engine is not implicated. ``new_bars`` pushes session d's bar to the
+strategy, which selects off session d's signal and sends orders that are
+crossed on the same session's bar, so the engine has always been charging the
+book the return of the session it was picked on, and the backtest numbers above
+in the note are on the contaminated ruler. What that means is that the engine's
+long-only result, which is a return from the open of the entry bar to the open
+of the exit bar, is a different measurement from the daily close-to-close
+spread, and the two have never been directly compared on the same lag.
+Comparing them is the next work, not a correction to the note's conclusions.
+
+What the contamination does change is the conclusion that the ranking has no
+tradable content. That conclusion came from the lag-0 spread and is correct on
+that ruler, but the lag-1 book on the same signal earns a positive spread with
+both legs agreeing, no extreme-day dependence, and it clears a null control on
+every window measured. The honest statement is no longer that the ranking has
+no tradable content, it is that the previous long-short ruler was contaminated
+and the uncontaminated one has not yet been pushed into the engine.
+
+The clean ruler also changes the question for a book that pays. The
+configurations that clear the gates on the uncontaminated ruler are daily
+rebalancing at band 5%/5% or the 30-session clock at the same band, and the
+question that remains is whether the engine can trade either at a cost that
+clears the fee gate it already uses.
+
 ## Where this leaves the signal
 
 The three knobs that have been swept all flip sign between the halves: the
@@ -1865,12 +1963,12 @@ distinguishable from zero. The first is a research finding. The other three
 are reasons the research has not produced a book.
 
 What would change that is not another sweep. The second out-of-sample window
-has now been supplied by shortening the train window to 250 sessions, and the
-long-short book fails it on daily spreads (best t = 1.42) and on five-session
-blocks (best t = 1.69), with the 500-session window agreeing. What remains
-untried is the other option: a signal whose construction differs from the
-158-factor fit that produced this one. That is new work rather than a new
-setting, and it is where the time should go if the goal is a book that pays.
+has now been supplied by shortening the train window to 250 sessions, and on the
+contaminated daily ruler the long-short book fails it. On the honest ruler the
+same signal reads +0.19 to +0.27 percent a session after costs, clears a null
+control on every window measured, and the remaining work is to push that
+lag-one book into the engine and measure it there, because the engine has been
+charging the book the return of the session it was picked on.
 
 Three facts remain outside the repository and still gate deployment on top of
 all of the above: a quoted lending rate, the shortability of the actual
