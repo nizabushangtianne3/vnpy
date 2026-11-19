@@ -1672,31 +1672,74 @@ cross-section falls and costs when it rises, and that is the same
 down-market exposure the excess split above identified. It is not an alpha and
 it is not sizeable as one.
 
+## The market-neutral long-short book is the first test that cannot inherit the market, and the ranking does not survive it
+
+Every reading above graded the book against a universe it sits inside, so each
+one inherited the universe's sign along with the selection's contribution.
+Holding the top of the signal against the bottom of the same signal removes
+that, because the two legs take the cross-section in opposite directions and
+the cross-section cancels out of the difference. This is the only test in this
+note where a positive number cannot be produced by a market that moved in one
+direction.
+
+Run on one-session closes, equal weighted, 30 session clock, the same buffer:
+
+| legs | fit daily% | fit t | fit p | graded daily% | graded t | graded p |
+| --- | --- | --- | --- | --- | --- | --- |
+| top 5% / bottom 5% | +0.0219 | 0.31 | 0.755 | +0.0186 | 0.27 | 0.789 |
+| top 5% / bottom 10% | +0.0099 | 0.16 | 0.871 | +0.0439 | 0.85 | 0.397 |
+| top 10% / bottom 10% | -0.0147 | -0.24 | 0.810 | +0.0464 | 0.78 | 0.436 |
+
+Not one of these is distinguishable from zero on either half. The daily means
+are all within a quarter of a basis point of each other, the t statistics are
+all below one, and the graded half is not more significant than the fit half
+despite looking larger.
+
+The compounding is the same story and it is worse, because the month-level
+series is dominated by two months. The top-5/bottom-5 book compounds to +3.77
+percent on the fit half and +4.49 on the graded half, which looks like the
+first positive-on-both-halves result in this note, and then the monthly detail
+takes it away: the graded half is -17.80 percent in 2026-07 and +19.95 percent
+in 2026-08, so the two months alone are worth more than the whole year's
+return and neither is a property of the ranking. The graded half is positive in
+6 of 14 months and the fit half in 6 of 13, which is a coin flip.
+
+So this is the answer to what the previous sections were asking. The signal
+ranks (IC +0.0633 and +0.0521), and a book that holds the ranking against
+itself earns nothing that a t test can separate from noise. That is not a
+statement that the ranking is empty; it is a statement that its tradable
+content, at this band, this clock and this universe, has not been shown to
+exist, and that every positive number earlier in this note was the market's
+direction hiding in a comparison.
+
 ## Where this leaves the signal
 
-Rank IC +0.0633 on the fit half and +0.0521 on the graded half, positive on
-70.9 and 66.0 percent of sessions. The whole-universe excess is -2.20 and
-+6.00, and on the fit half every volatility re-weighting and grouping tried
-above makes it worse. The signal ranks; the ranking as a book has not been
-shown to earn anything that survives both halves.
+The three knobs that have been swept all flip sign between the halves: the
+hedge ratio, the band edge, and the volatility weighting. The one test that
+removes the market from the arithmetic entirely, holding the top of the signal
+against the bottom of it, returns a daily mean of +0.022 on the fit half and
++0.019 on the graded half with t statistics of 0.31 and 0.27. The ranking is
+real as a ranking. Nothing built on it here has been shown to be real as a
+source of return.
 
-What has survived every attempt so far is the one thing that is measured
-rather than constructed: the signal still ranks in 2026, after 2024 and 2025
-were used to fit the model that produced it, and it ranks the quiet half
-better than the volatile half when the ranking is made over the whole
-cross-section. Neither of those is a tradable edge on its own, because every
-way of turning them into a book that has been tried here is a bet on the
-cross-section's direction rather than on the ranking.
+This is the point where the honest report stops being about a parameter. The
+repository has, on the same cached bars, measured: a signal that still ranks in
+2026; a graded half that earns +3.78 percent only while the market is short;
+a selection that beats its universe by 6.35 percent on one clock and 6.00
+percent on another, both of which are shown to be down-market exposures rather
+than alphas; and a market-neutral long-short whose return is not
+distinguishable from zero. The first is a research finding. The other three
+are reasons the research has not produced a book.
 
-What is left is not a parameter. The three knobs that have been swept all flip
-sign between the halves: the hedge ratio, the band edge, and now the
-volatility weighting. The next thing worth measuring is therefore not another
-knob but whether the ranking's own contribution can be isolated from the
-cross-section's, by holding the cross-section's direction constant, which the
-one-session non-overlapping excess already does and which no knob tried here
-has survived. That is a question about the book, not about a setting, and it
-cannot be answered by another sweep on this one window.
+What would change that is not another sweep. It is either a second
+out-of-sample window that the model has never seen, which the cached bars
+cannot supply because the model was fitted on everything in them, or a signal
+whose construction differs from the 158-factor fit that produced this one,
+which is new work rather than a new setting. Both are outside what a sweep can
+reach, and the second of the two is where the time should go if the goal is a
+book that pays.
 
-Three facts remain outside the repository and still gate deployment: a quoted
-lending rate, the shortability of the actual instruments, and whether an ETF
-leg can carry a 1x hedge on a book of this size.
+Three facts remain outside the repository and still gate deployment on top of
+all of the above: a quoted lending rate, the shortability of the actual
+instruments, and whether an ETF leg can carry a 1x hedge on a book of this
+size.
