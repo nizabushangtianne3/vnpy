@@ -2025,17 +2025,20 @@ hedge ratio, the band edge, and the volatility weighting. The one test that
 removes the market from the arithmetic entirely, holding the top of the signal
 against the bottom of it, returns a daily mean of +0.022 on the fit half and
 +0.019 on the graded half with t statistics of 0.31 and 0.27. The ranking is
-real as a ranking. Nothing built on it here has been shown to be real as a
-source of return.
+real as a ranking. The lag-one market-neutral engine book built on it reads
+positive in both the 2022-2024 and 2025-2026 windows after the engine's own
+costs, but the second window's Sharpe is 0.16 and its 2026 calendar year is
+negative, so the book clears direction but not deployment.
 
 This is the point where the honest report stops being about a parameter. The
 repository has, on the same cached bars, measured: a signal that still ranks in
 2026; a graded half that earns +3.78 percent only while the market is short;
 a selection that beats its universe by 6.35 percent on one clock and 6.00
 percent on another, both of which are shown to be down-market exposures rather
-than alphas; and a market-neutral long-short whose return is not
-distinguishable from zero. The first is a research finding. The other three
-are reasons the research has not produced a book.
+than alphas; and a market-neutral long-short that reads +14.97% in the first
+honest window and +1.34% in the second. The first is a research finding. The
+others are reasons the research has not yet produced a book that can be
+deployed without further evidence.
 
 What would change that is not another sweep. The second out-of-sample window
 has now been supplied by shortening the train window to 250 sessions, and on the
@@ -2043,7 +2046,12 @@ contaminated daily ruler the long-short book fails it. On the honest ruler the
 same signal reads +0.19 to +0.27 percent a session after costs, clears a null
 control on every window measured, and the remaining work is to push that
 lag-one book into the engine and measure it there, because the engine has been
-charging the book the return of the session it was picked on.
+charging the book the return of the session it was picked on. That push is now
+done: the engine's own neutral book reads +14.97% in the first window and
++1.34% in the second, with the second window's Sharpe at 0.16 and its 2026
+calendar year negative. The question has moved from "can the signal produce a
+return" to "why does it decay in the second window and can the decay be
+removed without overfitting a parameter to the second window."
 
 Three facts remain outside the repository and still gate deployment on top of
 all of the above: a quoted lending rate, the shortability of the actual
