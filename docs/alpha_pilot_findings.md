@@ -1975,6 +1975,49 @@ that the engine's own long-short, at a band and clock that clear the offline
 gates, is profitable after the engine's own costs, and that is the next
 measurement.
 
+### The neutral book at lag one clears the first window but not the second
+
+The market-neutral book with the same 250-session signal, band 5-15 with a
+0.10 buffer on a 30-session clock, 2022-01-20 through 2024-12-31:
+
+| setting | total% | annual% | sharpe | max dd% | turnover x | net-x | gross-x |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| lag 0 | +15.1629 | +5.0968 | 1.0608 | -6.3458 | 8.952 | -0.0038 | 0.4588 |
+| lag 1 | +10.9757 | +3.6893 | 0.8115 | -7.2887 | 8.819 | -0.0194 | 0.5113 |
+
+The lag-one year split is 2022 +4.17%, 2023 +6.93%, 2024 -0.12%. The lag-zero
+year split is 2022 +4.62%, 2023 +9.02%, 2024 +1.52%. The book is near neutral
+in both cases, and the gap between the two settings is a long-side effect, not
+a hedge change: the short basket is a fixed liquidity pool and does not read
+the signal.
+
+Band sensitivity at lag one, same window and clock:
+
+| band | total% | annual% | sharpe | max dd% | turnover x | 2022% | 2023% | 2024% |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0-5 | +14.9692 | +5.0317 | 0.8678 | -6.8439 | 8.844 | +3.13 | +8.21 | +3.62 |
+| 5-10 | +11.4368 | +3.8443 | 0.8247 | -7.5063 | 8.864 | +4.85 | +6.74 | -0.16 |
+| 5-15 | +10.9757 | +3.6893 | 0.8115 | -7.2887 | 8.819 | +4.17 | +6.93 | -0.12 |
+| 10-20 | +11.9585 | +4.0197 | 0.8328 | -7.3381 | 8.870 | +4.77 | +7.41 | -0.22 |
+
+The 0-5 band is the only one of the four that stays positive in every year.
+The shorter clock does not help the engine: the same 0-5 band at a
+5-session rebalance reads +13.2018% total, but its Sharpe falls to 0.5756, its
+drawdown widens to -11.3559%, and commission rises from 0.46% to 2.65% of
+capital. On this engine the 30-session clock is the better book.
+
+The 0-5 band on the 2025-2026 window does not carry the same reading:
+
+| window | total% | annual% | sharpe | max dd% | turnover x | commission fraction | 2025% | 2026% |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2025-01-02..2026-11-13 | +1.3435 | +0.7150 | 0.1610 | -10.8704 | 5.367 | 0.27% | +2.26 | -0.92 |
+
+Both windows are positive in total, but the second is materially weaker and
+the 2026 calendar year is negative. This is the engine's own market-neutral
+book with its own costs, so the honest reading is that the lag-one book
+clears the first window and fails the second, not that either window
+proves a deployable book.
+
 ## Where this leaves the signal
 
 The three knobs that have been swept all flip sign between the halves: the
