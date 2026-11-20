@@ -330,6 +330,58 @@ def yearly(engine: BacktestingEngine) -> dict:
     return out
 
 
+def contract_breakdown(engine: BacktestingEngine, top_n: int = 5) -> dict:
+    """Show the biggest winners and losers by calendar year.
+
+    The engine keeps one ``ContractDailyResult`` per contract per day, so
+    the net pnl can be aggregated directly from it. Reporting the top
+    winners and losers makes it obvious whether a year's result came from
+    a broad book or from a handful of names.
+    """
+    by_year: dict[int, dict[str, dict]] = {}
+    for daily in engine.daily_results.values():
+        year: int = daily.date.year
+        year_data: dict[str, dict] = by_year.setdefault(
+            year, {"contracts": {}}
+        )
+        for vt_symbol, contract_result in daily.contract_results.items():
+            contract_data: dict = year_data["contracts"].setdefault(
+                vt_symbol,
+                {
+                    "net_pnl": 0.0,
+                    "turnover": 0.0,
+                    "long_days": 0,
+                    "short_days": 0,
+                },
+            )
+            contract_data["net_pnl"] += contract_result.net_pnl
+            contract_data["turnover"] += contract_result.turnover
+            if contract_result.start_pos > 0:
+                contract_data["long_days"] += 1
+            elif contract_result.start_pos < 0:
+                contract_data["short_days"] += 1
+
+    out: dict = {}
+    for year, year_data in sorted(by_year.items()):
+        rows: list[dict] = []
+        for vt_symbol, data in year_data["contracts"].items():
+            rows.append(
+                {
+                    "vt_symbol": vt_symbol,
+                    "net_pnl": round(data["net_pnl"], 2),
+                    "turnover": round(data["turnover"], 2),
+                    "long_days": data["long_days"],
+                    "short_days": data["short_days"],
+                }
+            )
+        rows.sort(key=lambda row: row["net_pnl"])
+        out[str(year)] = {
+            "losers": rows[:top_n],
+            "winners": list(reversed(rows[-top_n:])),
+        }
+    return out
+
+
 def main() -> int:
     """Run one band, or a sweep over several."""
     parser = argparse.ArgumentParser(description="Band strategy backtest")
@@ -534,6 +586,7 @@ def main() -> int:
             "hedge_ratio": args.hedge_ratio if args.strategy == "neutral" else None,
             "summary": summary,
             "by_year": by_year,
+            "contract_breakdown": contract_breakdown(engine),
             "legs": leg_split(engine, args.hedge_symbol),
         }
         results.append(result)
