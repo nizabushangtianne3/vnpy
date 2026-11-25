@@ -46,7 +46,13 @@ DEFAULT_SIGNAL: str = (
 )
 
 
-def load_hedge_bars(hedge_symbol: str, start: str, end: str, lab: str) -> list:
+def load_hedge_bars(
+    hedge_symbol: str,
+    start: str,
+    end: str,
+    lab: str,
+    market_dates: list[datetime] | None = None,
+) -> list:
     """Load unadjusted daily bars for the hedge instrument.
 
     The strategy's own bars are already forward-adjusted A-share bars, but
@@ -71,9 +77,22 @@ def load_hedge_bars(hedge_symbol: str, start: str, end: str, lab: str) -> list:
         covered = cached.filter(
             (pl.col("datetime") >= began_dt) & (pl.col("datetime") <= finished_dt)
         )
-        if covered.height and (
-            covered["datetime"].min() == began_dt
-            and covered["datetime"].max() == finished_dt
+        if market_dates:
+            expected_first = min(
+                (date for date in market_dates if date >= began_dt), default=None
+            )
+            expected_last = max(
+                (date for date in market_dates if date <= finished_dt), default=None
+            )
+        else:
+            expected_first = began_dt
+            expected_last = finished_dt
+        if (
+            covered.height
+            and expected_first is not None
+            and expected_last is not None
+            and covered["datetime"].min() == expected_first
+            and covered["datetime"].max() == expected_last
         ):
             bars: list[BarData] = []
             market_exchange = Exchange.SSE if market == "SSE" else Exchange.SZSE
@@ -585,6 +604,7 @@ def main() -> int:
             args.start,
             args.end,
             args.lab,
+            signal["datetime"].unique().to_list(),
         )
         lab.save_bar_data(hedge_bars)
         print(f"hedge bars: {len(hedge_bars)}")
