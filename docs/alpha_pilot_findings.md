@@ -2057,3 +2057,26 @@ Three facts remain outside the repository and still gate deployment on top of
 all of the above: a quoted lending rate, the shortability of the actual
 instruments, and whether an ETF leg can carry a 1x hedge on a book of this
 size.
+
+## The ETF hedge at 1x is not the missing deployment path
+
+Replacing the fixed 30-name liquidity basket with ``510300.SSE`` and keeping
+the 0-5 band on the 250-session ensemble signal makes both long windows read
+positive. At an assumed 8 percent lending rate the readings are +6.4325 percent
+for 2022-01-20 through 2024-12-31 and +0.9838 percent for 2025-01-02 through
+2026-11-13. But the repository's own fit/hold split still rejects it: 2024 fits
+at +2.2173 percent and the hold half from 2025-10-01 through 2026-11-13 loses
+1.9700 percent.
+
+The leg split explains the failure. The hold half's ETF leg earns +299.77
+million, while the stock side loses -366.78 million; the total is -67.01
+million. This is not a hedge failure in 2026 the way the fixed basket was:
+the ETF side is now profitable. The selection leg itself is losing in the
+period the repository reserved for deployment evidence.
+
+The offline long-short ruler agrees with this caution. Its trimmed daily
+spread is +0.0788 percent for 2022-2024 (t=1.65, p=0.099) and +0.0514 percent
+for 2025-2026 (t=1.12, p=0.261). The full-window ruler is +0.0155 percent
+with t=0.37 and p=0.712. The ranking remains directionally positive, but it is
+not yet distinguishable from noise, and the ETF-hedged engine does not clear
+the hold half after costs.

@@ -30,13 +30,13 @@ import polars as pl
 
 from vnpy.alpha import AlphaLab
 from vnpy.alpha.strategy import AlphaStrategy, BacktestingEngine
-from vnpy.autonomous.stocks import _fetch_window
 from vnpy.alpha.strategy.strategies.market_neutral_strategy import (
     MarketNeutralStrategy,
 )
 from vnpy.alpha.strategy.strategies.rank_band_strategy import RankBandStrategy
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.object import BarData
+from vnpy.autonomous.stocks import _fetch_window
 
 
 DEFAULT_LAB: str = "D:/Codex/work/vnpy-alpha-cache/alpha_lab"
@@ -46,7 +46,7 @@ DEFAULT_SIGNAL: str = (
 )
 
 
-def load_hedge_bars(hedge_symbol: str, start: str, end: str) -> list:
+def load_hedge_bars(hedge_symbol: str, start: str, end: str, lab: str) -> list:
     """Load unadjusted daily bars for the hedge instrument.
 
     The strategy's own bars are already forward-adjusted A-share bars, but
@@ -57,9 +57,45 @@ def load_hedge_bars(hedge_symbol: str, start: str, end: str) -> list:
     symbol, _, market = hedge_symbol.partition(".")
     if market not in ("SSE", "SZSE"):
         raise ValueError(f"对冲标的上交所或深交所之外的代码：{hedge_symbol}")
-    secid = f"{('1' if market == 'SSE' else '0')}.{symbol}"
     began = datetime.strptime(start, "%Y-%m-%d").strftime("%Y%m%d")
     finished = datetime.strptime(end, "%Y-%m-%d").strftime("%Y%m%d")
+    cache_path = (
+        Path(lab)
+        / "daily"
+        / f"{hedge_symbol}.parquet"
+    )
+    if cache_path.exists():
+        cached = pl.read_parquet(cache_path)
+        began_dt = datetime.strptime(start, "%Y-%m-%d")
+        finished_dt = datetime.strptime(end, "%Y-%m-%d")
+        covered = cached.filter(
+            (pl.col("datetime") >= began_dt) & (pl.col("datetime") <= finished_dt)
+        )
+        if covered.height and (
+            covered["datetime"].min() == began_dt
+            and covered["datetime"].max() == finished_dt
+        ):
+            bars: list[BarData] = []
+            market_exchange = Exchange.SSE if market == "SSE" else Exchange.SZSE
+            for row in covered.iter_rows(named=True):
+                bars.append(
+                    BarData(
+                        symbol=symbol,
+                        exchange=market_exchange,
+                        datetime=row["datetime"],
+                        interval=Interval.DAILY,
+                        open_price=row["open"],
+                        high_price=row["high"],
+                        low_price=row["low"],
+                        close_price=row["close"],
+                        volume=row["volume"],
+                        turnover=row["turnover"],
+                        open_interest=row["open_interest"],
+                        gateway_name="DB",
+                    )
+                )
+            return bars
+    secid = f"{('1' if market == 'SSE' else '0')}.{symbol}"
     bars = _fetch_window(secid, "101", began, finished, fqt="0")
     if not bars:
         raise ValueError(f"无法加载对冲标的行情：{hedge_symbol}")
@@ -545,7 +581,10 @@ def main() -> int:
     if args.hedge_symbol:
         print(f"加载对冲标的 {args.hedge_symbol}")
         hedge_bars: list[BarData] = load_hedge_bars(
-            args.hedge_symbol, args.start, args.end
+            args.hedge_symbol,
+            args.start,
+            args.end,
+            args.lab,
         )
         lab.save_bar_data(hedge_bars)
         print(f"hedge bars: {len(hedge_bars)}")
