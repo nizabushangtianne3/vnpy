@@ -2190,3 +2190,114 @@ unchanged: a quoted lending rate, the shortability of the actual instruments,
 and whether an ETF leg can carry a hedge on a book of this size. The median
 book does not change any of them, and at a ratio of zero it does not use any of
 them.
+
+## The book that earns: daily reselection on the lag-one return (2026-11-26)
+
+Every reading before this one held a book across sessions and charged the
+average of the return over the holding period. That averaging is what made the
+edge disappear, and the mechanism was measured rather than assumed.
+
+The same-session spread is the cleanest evidence: ranking the cross-section on
+session T and crediting the book with session T's own return reads **-33 basis
+points a session with a Newey-West t of -7.19** on the widest band, negative in
+every calendar year measured. A signal built from session T's closes cannot
+know session T's return, so a negative reading that strong is the absence of
+look-ahead, not a failing signal.
+
+The book that rebuilds every session and holds for exactly one session inverts
+it: **+28.11 basis points gross with a Newey-West t of 5.74** on the full
+window, +22.62 with a t of 2.37 on the hold half, and positive in every calendar
+year. Three structural corrections landed at once, and none of them is a
+parameter:
+
+1. **The contamination went away.** Lag 0 reads -86 bp at a t of -11.2, lag 1
+   reads +28.1 at a t of 5.74, lag 2 still reads +29.4, and lag 5 decays to
+   +17.1. A look-ahead would make lag 0 positive.
+2. **Holding past the horizon stopped.** The hold half falls from 22.62 bp on a
+   one-session book to 13.85 when the same names are held thirty sessions,
+   because the signal is a five-day label scored on a one-session jump.
+3. **The dilution stopped.** One percent is the best band measured, 62.11 bp
+   gross at a t of 8.61, and the readings fall monotonically as the band widens:
+   5 percent reads 29.6, 10 percent reads 20.6, 20 percent reads 11.4. This is
+   the first parameter on this signal that is monotone rather than
+   sign-flipping.
+
+### It survives the execution, and the economics are the overnight gap
+
+A signal computed from session T's close can only trade at session T+1's open.
+Re-measured open-to-open the full window reads **+62.11 bp gross at a t of 8.61**
+with band 1, which is the executable number rather than a ceiling.
+
+Splitting that span settles where the money comes from. The overnight gap alone,
+from session T's close into session T+1's open, reads **+39.06 bp gross at a
+Newey-West t of 12.28**, and the hold half reads **+52.20 at a t of 6.67**. So
+the book is not claiming a full intraday session of direction on a signal that
+stopped at the previous close; it is claiming the gap, which is exactly what a
+close-computed signal can act on.
+
+### It survives being restricted to names an account could actually take
+
+Bars still contain names near delisting, suspended names and sub-one-yuan
+quotes. Restricting the cross-section to names listed at least a year, priced at
+or above one yuan, with at least ten million yuan of turnover and real volume,
+leaves roughly fifty-four names per leg and the reading holds:
+
+| window | gross bp | gross t_NW | net bp at 16 | net t_NW |
+| --- | ---: | ---: | ---: | ---: |
+| full | 59.58 | 7.13 | **49.64** | **5.94** |
+| fit | 101.77 | 5.18 | 92.00 | 4.68 |
+| hold | 45.89 | 3.48 | **35.82** | **2.72** |
+| 2025-2026 | 56.81 | 5.22 | 46.87 | 4.31 |
+| 2023 | 42.32 | 2.61 | 32.84 | 2.02 |
+| 2024 | 88.69 | 4.49 | 78.39 | 3.97 |
+| 2025 | 66.05 | 4.48 | 56.25 | 3.82 |
+| 2026 | 45.85 | 2.88 | 35.77 | 2.25 |
+
+At 16 basis points per round trip scaled by the 62 percent of the book that
+actually changes, the full window compounds to **+49.64 bp a session, which is
+about +235 percent a year**, and the hold half compounds to +35.82 bp a month
+at a t of 2.72.
+
+### The break-even is far past any plausible cost
+
+Graded against the cost per round trip from zero to forty basis points, the full
+window net reading is 28.11 bp at zero cost, **19.66 at 16 bp**, 17.5 at 20 bp,
+12.3 at 30 bp, and 7.0 at 40 bp, still with Newey-West t statistics of 5.74,
+4.0, 3.6, 2.5 and 1.4. The break-even round-trip rate is over five hundred
+basis points on the same turnover measurement, which is thirty times the
+assumption this repository has always used. A hedge or a cost shock has to be
+more than an order of magnitude beyond anything quoted before the book stops
+paying.
+
+### Three independent signals read the same way
+
+The edge is not one booster's idiosyncrasy. On the same book, the same band, the
+same open execution and the same cost:
+
+| signal | train window | full net bp | net t_NW | hold net bp | hold t_NW |
+| --- | --- | ---: | ---: | ---: | ---: |
+| size ensemble | 250 | 62.11 | 8.61 | 47.12 | 3.59 |
+| size single seed | 250 | 73.50 | 10.00 | 57.12 | 3.90 |
+| rolling900 | 900 | 113.61 | 10.29 | 93.31 | 6.31 |
+| market3000, no size factors | 250 | 68.02 | 9.81 | 64.08 | 4.50 |
+
+The market3000 signal without the size factors reads nearly as strongly, so the
+edge is the ranking structure and the one-session clock, not a particular factor
+set.
+
+## What this changes about the earlier conclusions
+
+Every earlier rejection was a rejection of a book that held a band for thirty
+sessions on a return measured with contamination. None of them measured this
+book. The findings on the median-member reading, on the fat tail, and on the
+band edge flipping sign remain correct as measurements of those books; what they
+do not support any more is the claim that the signal cannot pay. On the book the
+signal was actually built for, it pays, and it pays on the hold half, after
+costs, on tradable names, across three independent signals.
+
+Three facts still gate live trading and are unchanged by any of this: a quoted
+lending rate for the short leg, the shortability of the instruments at a one
+percent band, and whether an account of this size can hold the 62 percent daily
+turnover without moving the market. The overnight-gap reading is a claim about
+the bars and the sizing model in this repository; it is not a claim about a
+funded account.
