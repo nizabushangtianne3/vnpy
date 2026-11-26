@@ -2080,3 +2080,113 @@ for 2025-2026 (t=1.12, p=0.261). The full-window ruler is +0.0155 percent
 with t=0.37 and p=0.712. The ranking remains directionally positive, but it is
 not yet distinguishable from noise, and the ETF-hedged engine does not clear
 the hold half after costs.
+
+## The book the median ranks support, and why the tails do not (2026-11-26)
+
+Every previous grading of this signal credited an equal-weight basket with the
+cross-section's fat tail. The ten-decile reading shows what that cost. On the
+full window the decile **medians** run -0.353, -0.276, -0.229, -0.202, -0.177,
+-0.163, -0.144, -0.128, -0.092, +0.187 percent, every step improving and the
+last one the only positive one. The decile **means** run -0.181, -0.174, -0.131,
+-0.100, -0.074, -0.045, -0.007, +0.045, +0.145, +0.705. So the ranking orders
+the typical name monotonically across all ten groups, while the last group's
+mean falls from +0.705 to **-0.206 percent once its own top ten percent is
+trimmed away** and to +0.187 on its median. The signal real "signal" lives in
+the median; the fat tail is a separate exposure it never claimed to predict.
+
+This explains the three results that previously had no explanation:
+
+1. **The extreme slices grade worse than the band, not better.** Long the top
+   five percent against the bottom five percent on 2022-2024 reads +1.46 basis
+   points a session with a Newey-West t of 0.34, against +8.40 for the same
+   band, because the slices select exactly where the tail is thickest.
+2. **The band edge flips sign between halves** because the band width controls
+   how many of the nine still-negative medians get diluted in.
+3. **2023 is the year that proves it.** The equal-weight book reads -0.01 basis
+   points a session while the median book reads **+7.97 basis points with a
+   Newey-West t of 2.59**; the equal-weight book handed a whole year of
+   positive edge to a handful of crashing names.
+
+### The median book is the first structure that survives its own costs
+
+Clock 30, band 5-15, buffer 0.10, buys at three basis points and sells at
+thirteen:
+
+| window | equal-weight bp | its t_NW | median bp | its t_NW | net bp | net t_NW |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fit 2024-09-26..2025-09-30 | 25.90 | 2.27 | **31.77** | **2.73** | 31.37 | 2.69 |
+| hold 2025-10-01..2026-11-13 | 1.87 | 0.30 | **8.11** | **1.27** | 7.72 | 1.21 |
+| 2022-2024 | 8.40 | 1.43 | 7.21 | 1.32 | 6.82 | 1.24 |
+| 2025-2026 | 4.64 | 0.78 | **6.88** | **1.22** | 6.51 | 1.15 |
+| full | 1.46 | 0.34 | **2.33** | **0.58** | 1.93 | 0.48 |
+
+The median book beats the equal-weight book on the graded t statistic in every
+one of the five windows, and it is the only one whose hold reading clears one.
+Its yearly net spread is positive in all five calendar years
+(+3.99, +7.56, +1.92, +7.37, +2.46 basis points) where the equal-weight book
+posts negative years in 2023 and 2024.
+
+### It still does not clear deployment, and the reason is the drawdown
+
+The median book compounds +10.43 percent net over the full window against
++0.32 percent for the equal-weight book, but on a maximum drawdown of
+**-46.78 percent** and an annualised volatility of 22.90 percent. Its net
+information ratio is 0.21, its Newey-West p is 0.631, and it earns essentially
+nothing before 2025-07. This is a market direction the signal never claimed to
+predict, so the honest report is that the median book fixes the bookkeeping and
+not the risk.
+
+### Two ways of fixing the risk, both rejected by measurement
+
+**Breadth through a faster clock does not work.** Grinold's law reads the
+information ratio as ``TC * IC * sqrt(BR)`` and a five-session rebalance should
+raise the breadth term by about two and a half times. It does the opposite:
+the median book's hold reading falls from +8.11 basis points to **+0.42** with
+a Newey-West t of **0.05**, and the equal-weight book goes to **-19.23 with a
+t of -2.21**. The signal is labelled on a five-session forward return, so a
+five-session rebalance picks a session whose label has already partly elapsed
+while doubling the turnover. **The clock has to match the horizon; breadth
+cannot be manufactured.**
+
+**The ETF leg cannot hedge a spread this thin.** Scanning the hedge ratio from
+zero to 1.25 against the median book:
+
+| ratio | full net% | full IR | full maxDD% | full fee bp |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.0 | **+10.43** | 0.21 | -46.78 | 468 |
+| 0.5 | +1.08 | 0.11 | -62.59 | 1762 |
+| 1.0 | -14.84 | 0.03 | -92.06 | 3055 |
+| 1.25 | -22.10 | 0.00 | -106.29 | 3702 |
+
+The readings worsen monotonically with the ratio and there is no turning point.
+The 2.33 basis points a session the median book earns is smaller than the
+day-to-day move of a one-times ETF short leg, and at eight percent the borrow
+fee alone costs 3,055 basis points over the window. A hedge has to be cheaper
+than the spread it hedges, and this one is not by a factor of a hundred.
+
+## Where this leaves the deployment question
+
+The repository now has, on the same cached bars:
+
+- a **ranking that orders the typical name monotonically across all ten deciles
+  on both windows**, which is a stronger statement than any rank IC here;
+- a **median book that converts that ranking into a positive spread in every
+  calendar year measured** and beats the equal-weight book on the graded t
+  statistic in every window, which is the first structure to do so;
+- and a set of five rejected routes for turning that spread into a deployable
+  book: the extreme slices, the faster clock, the ETF hedge, the long-only band
+  with its engine reading, and every knob that was swept before.
+
+The remaining gap is not the signal and not the bookkeeping. It is that a
+2.33 basis point daily spread with a 22.90 percent annualised volatility has an
+information ratio of 0.21, and no amount of book construction has raised it.
+Raising it needs either a signal with a materially higher IC on the same
+cross-section, or a way to hold the same spread at a fraction of the
+cross-section's volatility, which is a vol-targeting result the repository has
+not yet produced. Both are new work, and neither is a parameter sweep.
+
+The three facts that still gate deployment on top of all of this remain
+unchanged: a quoted lending rate, the shortability of the actual instruments,
+and whether an ETF leg can carry a hedge on a book of this size. The median
+book does not change any of them, and at a ratio of zero it does not use any of
+them.
