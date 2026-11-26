@@ -2301,3 +2301,100 @@ percent band, and whether an account of this size can hold the 62 percent daily
 turnover without moving the market. The overnight-gap reading is a claim about
 the bars and the sizing model in this repository; it is not a claim about a
 funded account.
+
+## 2026-11-26: the engine's daily-spread book, and two defects that had inflated it
+
+`DailySpreadStrategy` (vnpy/alpha/strategy/strategies/daily_spread_strategy.py) rebuilds the head and the tail of the ranking every session and is wired into `scripts/alpha_beta_backtest.py --strategy daily-spread`. Invocation:
+
+```
+python scripts/alpha_beta_backtest.py --strategy daily-spread \
+  --long-rate 0.01 --short-rate 0.01 --hedge-ratio R --signal-lag 1 \
+  --signal D:/Codex/work/vnpy-alpha-cache/sweeps/market3000_size_rolling250_250_h5_ens.parquet \
+  --start 2022-01-20 --end 2026-11-13 --capital 100000000
+```
+
+`--buffer-ratio` defaults to 0.10 in the CLI. Passing nothing silently changes the book, and the change is large; the table below is why the default has to be stated explicitly.
+
+### Defect 1: the buffer inflated every order instead of holding more names
+
+`buffer_ratio` is meant to let a held name slide a few rank points without being churned. It did, but the new-order list was then divided by the *new* names only, so a wider buffer reduced the order count while the notional stayed put and each order grew. The measurement is the count of names the engine actually held against a thirty-name target per leg:
+
+| buffer_ratio | long leg held | short leg held | avg order size |
+| --- | ---: | ---: | ---: |
+| 0.00 | 27.4 | 27.5 | 291,708 |
+| 0.10, before the fix | **54.6** | **56.7** | **452,339** |
+| 0.10, after the fix | 27.3 | 27.5 | — |
+
+A ten percent buffer left the book holding 1.8x its intended names per leg while charging 1.55x the notional. The fix sizes the leg across every name it will hold, kept ones included, and resets the buffer-carried names to that size. `--buffer-ratio 0` and `0.10` now hold the same name count, which is the test that the sizing is finally self-consistent.
+
+Every reading below is with the fix in place. The earlier `engine_ds_hr*.json` numbers (+665% at hr 0.2, +74.58% at hr 0.05) were produced with the defect and are withdrawn: they measured an oversized book, not the book they claimed to measure.
+
+### Defect 2: positions are held for several sessions, not one
+
+The offline ruler credits one session's open-to-open span. The engine does not do that. Closing fills are spread across sessions as a rule, not as an exception:
+
+- 1809 name/direction groups close on more than one session, accounting for 9365 closing fills
+- 1045 closing fills complete inside a single session
+- the longest matched open/close span in 2024 is 344 days; one short opened 2024-03-25 at 14.07 was not covered until 2024-04-03 at 23.00
+
+This is the `execute_trading` limit-order path: a name the strategy wants out is exited only when that session's bar satisfies the limit condition, and a partially filled exit leaves the remainder open into later sessions. The consequence is that the engine captures multi-session moves the offline ruler deliberately excludes. The two are no longer the same claim, and the engine's number cannot be compared to the offline one.
+
+### The corrected scan
+
+Equal-weight both legs, open fills, turn costs 5.10bp per unit of turnover, full window 2022-01-20 to 2026-11-13, signal_lag 1:
+
+| buffer | hedge_ratio | total % | Sharpe | max dd % | turnover x | trades |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.00 | 0.05 | 10.88 | 1.1829 | -3.51 | 141.6 | 98088 |
+| 0.00 | 0.10 | 22.70 | 1.1759 | -6.90 | 297.3 | 100140 |
+| 0.00 | 0.20 | 49.76 | 1.1767 | -13.37 | 653.5 | 101375 |
+| 0.05 | 0.05 | 2.54 | 0.3714 | -4.41 | 101.3 | 85391 |
+| 0.05 | 0.10 | 4.94 | 0.3636 | -8.72 | 203.0 | 88531 |
+| 0.05 | 0.20 | 9.53 | 0.3579 | -16.84 | 405.0 | 90405 |
+| 0.10 | 0.05 | 2.61 | 0.4094 | -2.77 | 91.3 | 81174 |
+| 0.10 | 0.10 | 5.22 | 0.4099 | -5.46 | 185.3 | 84815 |
+| 0.10 | 0.20 | 10.24 | 0.4054 | -10.73 | 378.8 | 86952 |
+
+The best reading of the scan is `buffer 0.00, hedge_ratio 0.05`: +10.88% over 1165 sessions, Sharpe 1.183, max drawdown -3.51%. Raising `hedge_ratio` scales the return and the drawdown together and leaves Sharpe flat at about 1.18, which is the signature of a lever rather than an improvement.
+
+Buffer 0 beats every non-zero buffer on Sharpe. The buffer was supposed to cut turnover; measured this way it only cut the order count and then re-inflated each order, which the fix removes. The measured result is that the buffer earns nothing here.
+
+### Three of five years are negative
+
+`buffer 0.00, hedge_ratio 0.05`, net pnl by year:
+
+| year | net pnl | mean per session | Sharpe | max drawdown |
+| --- | ---: | ---: | ---: | ---: |
+| 2022 | -1,360,360 | -5,915 | -1.339 | -2,258,418 |
+| 2023 | -496,643 | -2,052 | -0.229 | -2,631,353 |
+| 2024 | 8,059,275 | 33,303 | 3.486 | -1,114,621 |
+| 2025 | 4,887,572 | 20,113 | 2.865 | -975,332 |
+| 2026 | -208,802 | -1,004 | -0.132 | -1,926,336 |
+
+The offline ruler reads 2023 at +21.84bp/day; the engine reads -2.05bp of gross exposure. In 2024 the engine gets +33bp/day against the offline +86.74bp. The engine is roughly two-fifths of the offline reading on the profitable years and negative on three of five. Whatever the offline ruler is measuring, the engine does not reproduce it, and the difference is now traced to the multi-session holding above rather than left unexplained.
+
+### The look-ahead trap, and why +17.10% is invalid
+
+`signal_lag 0` reads +17.10% with Sharpe 1.86 and every year positive. It is not a result. In `on_bars`, `session_index` is `len(seen_session_dates)`, the current session already appended, and with `signal_lag 0` the index used is `session_index - 1`, the current session itself. The signal is computed from a session's close, so trading it at the same session's open uses information that did not exist when the bar opened.
+
+The offline ruler settles it. Grading the same book with the signal taken on the decision session and filled at that session's open:
+
+| window | lag 0, same-session signal and open | lag 1, previous session's signal |
+| --- | ---: | ---: |
+| full | -204.85bp | +50.10bp |
+| 2023 | -180.08bp | +24.86bp |
+| 2024 | -128.57bp | +90.02bp |
+| 2026 | -355.93bp | +29.37bp |
+
+The sign inverts on every window. A lag-0 reading is not a weaker version of the edge; on a close-computed signal it is a different and opposite effect, and any positive number it produces is the bias talking. `signal_lag 1` is the only honest setting for a close-computed daily signal, and the runner should not accept 0 without saying so.
+
+### What is still not answered
+
+1. Whether an order book can be turned over 62 percent a session at all. The engine charges 5.10bp per unit of turnover and nothing for impact; at this turnover the impact cost is the whole question and the engine cannot answer it.
+2. The short leg is the bottom one percent of a ~3000-name cross-section, about 27 names. Whether those names are borrowable at a real account's broker is unresolved.
+3. The multi-session holding means the engine's return is not the overnight-gap return the offline ruler found. Until the exit is forced to a single session, the engine result and the offline result are two different strategies and neither validates the other.
+4. Three of five years negative. This is not yet a fundable reading.
+
+### Honesty note
+
+The +665% and +74.58% figures in the previous handoff are withdrawn. They came from the buffer sizing defect and measured a book 1.8x its intended size. The corrected best reading is +10.88%, Sharpe 1.18, and three of five years negative. The offline ruler's +46.93bp/day remains a valid measurement of *its* book; the engine does not currently reproduce it.

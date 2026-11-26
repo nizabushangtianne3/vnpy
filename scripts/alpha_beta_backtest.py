@@ -33,6 +33,9 @@ from vnpy.alpha.strategy import AlphaStrategy, BacktestingEngine
 from vnpy.alpha.strategy.strategies.market_neutral_strategy import (
     MarketNeutralStrategy,
 )
+from vnpy.alpha.strategy.strategies.daily_spread_strategy import (
+    DailySpreadStrategy,
+)
 from vnpy.alpha.strategy.strategies.rank_band_strategy import RankBandStrategy
 from vnpy.trader.constant import Exchange, Interval
 from vnpy.trader.object import BarData
@@ -221,6 +224,8 @@ def build_engine(
     sell_rate: float,
     borrow_rate: float,
     signal_lag: int = 0,
+    long_rate: float = 0.01,
+    short_rate: float = 0.01,
 ) -> BacktestingEngine:
     """Set up one engine run with the band strategy."""
     engine = BacktestingEngine(lab)
@@ -245,6 +250,15 @@ def build_engine(
             "max_turnover_ratio": max_turnover_ratio,
             "open_rate": buy_rate,
             "close_rate": sell_rate,
+            "signal_lag": signal_lag,
+        }
+    elif strategy == "daily-spread":
+        strategy_class = DailySpreadStrategy
+        strategy_setting = {
+            "long_rate": long_rate,
+            "short_rate": short_rate,
+            "buffer_ratio": buffer_ratio,
+            "hedge_ratio": hedge_ratio,
             "signal_lag": signal_lag,
         }
     else:
@@ -456,8 +470,24 @@ def main() -> int:
     parser.add_argument(
         "--strategy",
         default="band",
-        choices=["band", "neutral"],
-        help="band is long only; neutral adds a short basket against it",
+        choices=["band", "neutral", "daily-spread"],
+        help=(
+            "band is long only; neutral adds a short basket against it; "
+            "daily-spread holds the top and the bottom of the ranking for one "
+            "session each"
+        ),
+    )
+    parser.add_argument(
+        "--long-rate",
+        type=float,
+        default=0.01,
+        help="daily-spread only: rank share held long",
+    )
+    parser.add_argument(
+        "--short-rate",
+        type=float,
+        default=0.01,
+        help="daily-spread only: rank share held short",
     )
     parser.add_argument(
         "--hedge-ratio",
@@ -633,6 +663,8 @@ def main() -> int:
             stock_sell,
             args.borrow_rate,
             args.signal_lag,
+            args.long_rate,
+            args.short_rate,
         )
         summary = summarise(engine, args.capital)
         by_year = yearly(engine)
@@ -641,7 +673,9 @@ def main() -> int:
             summary.update(audit)
         result = {
             "strategy": args.strategy,
-            "band": [low, high],
+            "band": [low, high]
+            if args.strategy != "daily-spread"
+            else [args.long_rate, args.short_rate],
             "hedge_ratio": args.hedge_ratio if args.strategy == "neutral" else None,
             "summary": summary,
             "by_year": by_year,
